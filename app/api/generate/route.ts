@@ -47,10 +47,12 @@ let provider = 'fal';
 try {
 // Fal.ai attempt
 const result = await fal.queue.submit('fal-ai/kling-video/v2.1/standard/text-to-video', {
-prompt,
-image_url: imageUrl || undefined,
-duration: 5,
-aspect_ratio: "16:9",
+  input: {
+    prompt,
+    image_url: imageUrl || undefined,
+    duration: 5,
+    aspect_ratio: "16:9",
+  }
 });
 
 await supabase.from('generations').update({

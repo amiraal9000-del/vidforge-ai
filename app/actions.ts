@@ -2,12 +2,12 @@
 
 export async function createGeneration(formData: FormData) {
   const prompt = formData.get('prompt') as string;
-  const imageUrl = formData.get('imageUrl') as string | null;
+  const image = formData.get('image') as File | null;
 
   return {
     id: 'gen_' + Date.now(),
     prompt,
-    image_url: imageUrl,
+    has_image: !!image,
     status: 'queued',
     model_used: 'fal-kling',
     created_at: new Date().toISOString(),

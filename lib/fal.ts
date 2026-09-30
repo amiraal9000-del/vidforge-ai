@@ -1,5 +1,7 @@
-import { FalClient } from '@fal-ai/client';
+import { fal } from '@fal-ai/client';
 
-export const fal = new FalClient({
+fal.config({
   credentials: process.env.FAL_KEY,
 });
+
+export { fal };

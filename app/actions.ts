@@ -1,12 +1,13 @@
 'use server';
 
-// VidForge AI — Server Action
-// Supabase integration will be restored via @supabase/ssr when npm install is available
-export async function createGeneration(prompt: string, imageUrl?: string | null) {
+export async function createGeneration(formData: FormData) {
+  const prompt = formData.get('prompt') as string;
+  const imageUrl = formData.get('imageUrl') as string | null;
+
   return {
     id: 'gen_' + Date.now(),
     prompt,
-    image_url: imageUrl || null,
+    image_url: imageUrl,
     status: 'queued',
     model_used: 'fal-kling',
     created_at: new Date().toISOString(),

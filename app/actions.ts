@@ -1,10 +1,12 @@
 'use server';
 
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
 
 export async function createGeneration(prompt: string, imageUrl?: string | null) {
-  const supabase = createClientComponentClient();
-  
+  const cookieStore = cookies();
+  const supabase = createServerComponentClientClient({ cookies: () => cookieStore });
+
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not authenticated');
 

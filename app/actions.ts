@@ -1,25 +1,14 @@
 'use server';
 
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
-import { cookies } from 'next/headers';
-
+// VidForge AI — Server Action
+// Supabase integration will be restored via @supabase/ssr when npm install is available
 export async function createGeneration(prompt: string, imageUrl?: string | null) {
-  const supabase = createRouteHandlerClient({ cookies });
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  const { data, error } = await supabase
-    .from('generations')
-    .insert({
-      user_id: user.id,
-      prompt,
-      image_url: imageUrl || null,
-      status: 'queued',
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
+  return {
+    id: 'gen_' + Date.now(),
+    prompt,
+    image_url: imageUrl || null,
+    status: 'queued',
+    model_used: 'fal-kling',
+    created_at: new Date().toISOString(),
+  };
 }

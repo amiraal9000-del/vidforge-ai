@@ -4,8 +4,7 @@ import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
 import { cookies } from 'next/headers';
 
 export async function createGeneration(prompt: string, imageUrl?: string | null) {
-  const cookieStore = cookies();
-  const supabase = createServerComponentClientClient({ cookies: () => cookieStore });
+  const supabase = createServerComponentClient({ cookies });
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Not authenticated');
@@ -15,7 +14,7 @@ export async function createGeneration(prompt: string, imageUrl?: string | null)
     .insert({
       user_id: user.id,
       prompt,
-      image_url: imageUrl,
+      image_url: imageUrl || null,
       status: 'queued',
     })
     .select()

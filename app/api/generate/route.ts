@@ -56,7 +56,7 @@ const result = await fal.queue.submit('fal-ai/kling-video/v2.1/standard/text-to-
 });
 
 await supabase.from('generations').update({
-fal_request_id: result.requestId,
+fal_request_id: result.request_id,
 status: 'processing',
 model_used: 'fal-kling'
 }).eq('id', generation.id);

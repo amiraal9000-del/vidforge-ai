@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   title: "VidForge AI — Turn Ideas Into Videos Instantly",
   description: "Generate stunning videos from text prompts and reference images",
   icons: {
-    icon: "/favicon.png",
+    icon: "/favicon.ico",
   },
 };
 

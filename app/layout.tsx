@@ -15,6 +15,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "VidForge AI — Turn Ideas Into Videos Instantly",
   description: "Generate stunning videos from text prompts and reference images",
+  icons: {
+    icon: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({

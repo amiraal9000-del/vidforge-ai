@@ -1,9 +1,12 @@
 'use client';
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+// ✅ THIS LINE — update it exactly:
+import { createBrowserClient } from '@supabase/ssr';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, User, LogOut, Music, FileText } from 'lucide-react';
+
+
 
 export default function Navbar() {
   const [user, setUser] = useState<any>(null);

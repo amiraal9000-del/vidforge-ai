@@ -1,27 +1,37 @@
 'use client';
 import { useState } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectTo = searchParams.get('redirectTo') || '/dashboard';
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setLoading(true);
 
     const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-    if (err) return setError(err.message);
     
-    router.push('/');
+    if (err) {
+      setError(err.message);
+      setLoading(false);
+      return;
+    }
+
+    router.push(redirectTo);
     router.refresh();
   };
 
@@ -57,9 +67,10 @@ export default function LoginPage() {
           {error && <p className="text-red-400 text-sm">{error}</p>}
           <button
             type="submit"
-            className="w-full py-3 bg-gradient-to-r from-violet-600 to-fuchsia-600 rounded-lg font-semibold hover:opacity-90"
+            disabled={loading}
+            className="w-full py-3 bg-gradient-to-r from-violet-600 to-fuchsia-600 rounded-lg font-semibold hover:opacity-90 disabled:opacity-50"
           >
-            Sign In
+            {loading ? 'Signing In...' : 'Sign In'}
           </button>
         </form>
 

@@ -6,7 +6,6 @@ import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
 
-// ── Inner component with useSearchParams ──
 function LoginContent() {
   const searchParams = useSearchParams();
   const redirectTo = searchParams?.get('redirect') || '/dashboard';
@@ -16,7 +15,7 @@ function LoginContent() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleLogin = async (e) => {
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
     setError('');
@@ -93,7 +92,6 @@ function LoginContent() {
   );
 }
 
-// ── Page with Suspense wrapper ──
 export default function LoginPage() {
   return (
     <Suspense fallback={

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
@@ -9,17 +9,26 @@ import { supabase } from '../../lib/supabase';
 function LoginContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const redirectTo = searchParams?.get('redirect') || '/dashboard';
+  const redirectTo = '/dashboard'; // Hardcoded — no tricks
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // If already logged in → go straight to dashboard
+  useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        router.replace(redirectTo);
+      }
+    };
+    checkSession();
+  }, [router]);
+
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    
-    // Prevent double clicks
     if (loading) return;
     
     setLoading(true);
@@ -31,26 +40,22 @@ function LoginContent() {
         password,
       });
 
-      if (authError) {
-        throw authError;
-      }
+      if (authError) throw authError;
+      if (!data?.session) throw new Error('Session not created');
 
-      if (!data?.user) {
-        throw new Error('No user returned');
-      }
-
-      // ✅ Multiple methods to ensure redirect works
-      router.push(redirectTo);
+      // ✅ Confirm session exists THEN go
+      console.log('✅ Logged in:', data.user?.email);
+      router.replace(redirectTo);
       router.refresh();
       
-      // Fallback — force navigation if router doesn't trigger
+      // Absolute fallback
       setTimeout(() => {
-        window.location.replace(redirectTo);
-      }, 150);
+        window.location.href = redirectTo;
+      }, 200);
 
     } catch (err: any) {
-      console.error('Login error:', err);
-      setError(err?.message || 'Login failed — please try again');
+      console.error('❌ Login error:', err);
+      setError(err?.message || 'Login failed');
       setLoading(false);
     }
   };

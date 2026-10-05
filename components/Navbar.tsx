@@ -1,19 +1,19 @@
 'use client';
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
-// ✅ THIS LINE — update it exactly:
 import { createBrowserClient } from '@supabase/ssr';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, User, LogOut, Music, FileText } from 'lucide-react';
-
-
 
 export default function Navbar() {
   const [user, setUser] = useState<any>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   
-  const supabase = createClientComponentClient();
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
   const router = useRouter();
 
   useEffect(() => {
@@ -34,18 +34,15 @@ export default function Navbar() {
   return (
     <nav className="border-b border-zinc-800 px-6 py-4">
       <div className="max-w-7xl mx-auto flex items-center justify-between">
-        {/* Logo */}
         <Link href="/" className="text-2xl font-bold bg-gradient-to-r from-violet-400 to-fuchsia-500 bg-clip-text text-transparent">
           VidForge AI
         </Link>
 
-        {/* Navigation */}
         <div className="flex items-center gap-6">
           <Link href="/" className="text-zinc-300 hover:text-white">Home</Link>
 
           {user ? (
             <>
-              {/* CREATE DROPDOWN */}
               <div className="relative">
                 <button
                   onClick={() => setCreateOpen(!createOpen)}
@@ -75,7 +72,6 @@ export default function Navbar() {
 
               <Link href="/history" className="text-zinc-300 hover:text-white">My Videos</Link>
 
-              {/* ACCOUNT DROPDOWN */}
               <div className="relative">
                 <button
                   onClick={() => setAccountOpen(!accountOpen)}

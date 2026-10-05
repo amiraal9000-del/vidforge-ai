@@ -18,23 +18,41 @@ function LoginContent() {
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    
+    // Prevent double clicks
+    if (loading) return;
+    
     setLoading(true);
     setError('');
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (authError) {
-      setError(authError.message);
+      if (authError) {
+        throw authError;
+      }
+
+      if (!data?.user) {
+        throw new Error('No user returned');
+      }
+
+      // ✅ Multiple methods to ensure redirect works
+      router.push(redirectTo);
+      router.refresh();
+      
+      // Fallback — force navigation if router doesn't trigger
+      setTimeout(() => {
+        window.location.replace(redirectTo);
+      }, 150);
+
+    } catch (err: any) {
+      console.error('Login error:', err);
+      setError(err?.message || 'Login failed — please try again');
       setLoading(false);
-      return;
     }
-
-    // ✅ Reliable redirect — no more stuck on login page
-    router.push(redirectTo);
-    router.refresh();
   };
 
   return (

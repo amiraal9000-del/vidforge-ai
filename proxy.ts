@@ -6,7 +6,23 @@ export async function proxy(request: Request) {
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { request, response: res }
+    {
+      cookies: {
+        getAll() {
+          const cookieHeader = request.headers.get('cookie');
+          if (!cookieHeader) return [];
+          return cookieHeader.split('; ').map(cookie => {
+            const [name, ...rest] = cookie.split('=');
+            return { name, value: rest.join('=') };
+          });
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            res.cookies.set(name, value, options);
+          });
+        }
+      }
+    }
   );
 
   const { data: { user } } = await supabase.auth.getUser();

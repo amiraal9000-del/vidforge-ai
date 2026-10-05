@@ -18,21 +18,44 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const checkUser = async () => {
+      // ✅ Get session FIRST — this is what was missing before
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        router.push('/login');
+        return;
+      }
+
+      // ✅ Session exists → now get user safely
       const { data: { user } } = await supabase.auth.getUser();
+      
       if (!user) {
         router.push('/login');
         return;
       }
+
       setUser(user);
       setLoading(false);
     };
+
     checkUser();
+
+    // ✅ Also listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (event === 'SIGNED_OUT' || !session) {
+          router.push('/login');
+        }
+      }
+    );
+
+    return () => subscription.unsubscribe();
   }, [supabase, router]);
 
   if (loading) {
     return (
       <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center">
-        <p>Loading...</p>
+        <p className="text-purple-400 text-lg">Loading dashboard...</p>
       </div>
     );
   }

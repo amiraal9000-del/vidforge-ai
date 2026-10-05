@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import Navbar from "./components/Navbar";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,9 +15,9 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "VidForge AI — Turn Ideas Into Videos Instantly",
-  description: "Generate stunning videos from text prompts and reference images",
+  description: "Photo + Music → Music Video | Photo + Script → Short Film",
   icons: {
-    icon: "/favicon.ico",
+    icon: "/favicon.png",
   },
 };
 
@@ -31,7 +32,10 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-zinc-950 text-white">
-        {children}
+        <Navbar />
+        <main className="flex-1">
+          {children}
+        </main>
       </body>
     </html>
   );

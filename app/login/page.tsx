@@ -3,11 +3,12 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
 
 function LoginContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const redirectTo = searchParams?.get('redirect') || '/dashboard';
 
   const [email, setEmail] = useState('');
@@ -31,7 +32,9 @@ function LoginContent() {
       return;
     }
 
-    window.location.href = redirectTo;
+    // ✅ Reliable redirect — no more stuck on login page
+    router.push(redirectTo);
+    router.refresh();
   };
 
   return (

@@ -28,14 +28,16 @@ export async function proxy(request: Request) {
   const { data: { user } } = await supabase.auth.getUser();
   const { pathname } = new URL(request.url);
 
-  const publicPaths = ['/login', '/signup'];
-  const isPublic = publicPaths.includes(pathname);
+  // Only protect the GENERATOR page — NOT the homepage
+  const protectedPaths = ['/generate', '/dashboard', '/history'];
+  const isProtected = protectedPaths.some(p => pathname.startsWith(p));
+  const isAuthPage = pathname === '/login' || pathname === '/signup';
 
-  if (!user && !isPublic) {
+  if (!user && isProtected) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
-  if (user && isPublic) {
-    return NextResponse.redirect(new URL('/', request.url));
+  if (user && isAuthPage) {
+    return NextResponse.redirect(new URL('/generate', request.url));
   }
 
   return res;

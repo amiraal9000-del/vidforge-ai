@@ -29,6 +29,9 @@ export default function ScriptGeneratePage() {
   const [showReview, setShowReview] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Calculate word count & timing — defined ONCE at top
+  const wordCount = prompt.trim() ? prompt.trim().split(/\s+/).length : 0;
+
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -59,8 +62,7 @@ export default function ScriptGeneratePage() {
   const canAfford = userCredits >= totalCost;
   
   // Estimate: average speaking rate = ~150 words per minute
-  const wordCount = prompt.trim() ? prompt.trim().split(/\s+/).length : 0;
-  const estimatedSpeechSeconds = Math.ceil((wordCount / 150) * 60);
+  const estimatedSpeechSeconds = wordCount > 0 ? Math.ceil((wordCount / 150) * 60) : 0;
   const scriptFits = estimatedSpeechSeconds <= duration;
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -76,7 +78,6 @@ export default function ScriptGeneratePage() {
     
     setIsPreviewingVoice(true);
     try {
-      // Browser built-in speech synthesis — FREE, no API cost
       const utterance = new SpeechSynthesisUtterance(prompt);
       utterance.rate = 0.9;
       utterance.pitch = 1;
@@ -121,10 +122,13 @@ export default function ScriptGeneratePage() {
     formData.append('cost', String(totalCost));
 
     try {
+      const sessionRes = await supabase.auth.getSession();
+      const token = sessionRes.data.session?.access_token;
+      
       const res = await fetch('/api/generate-script-video', {
         method: 'POST',
-        body: formData,
-        headers: { Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}` }
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed');
@@ -334,7 +338,13 @@ export default function ScriptGeneratePage() {
               <h3 className="font-bold text-lg mb-4">✅ Your Video Is Ready</h3>
               <video src={videoUrl} controls autoPlay loop className="w-full rounded-lg" />
               <div className="mt-5 flex gap-3">
-                <button onClick={() => { setVideoUrl(null); setPrompt(''); setImage(null); setImagePreview(null); setShowReview(false); }}
+                <button onClick={() => { 
+                  setVideoUrl(null); 
+                  setPrompt(''); 
+                  setImage(null); 
+                  setImagePreview(null); 
+                  setShowReview(false); 
+                }}
                   className="flex-1 py-3 bg-violet-600/20 hover:bg-violet-600/40 rounded-xl font-medium transition">
                   Create Another
                 </button>

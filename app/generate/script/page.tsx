@@ -1,14 +1,14 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 import { useRouter } from 'next/navigation';
-import { Upload, Play, Loader2, Clock, Volume2, VolumeX, ArrowLeft } from 'lucide-react';
+import { Upload, Play, Loader2, Clock, Volume2, VolumeX, ArrowLeft, CheckCircle, AlertCircle, Mic, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import AppNavbar from '@/components/AppNavbar';
 
 const PRICING = {
   durations: [
-    { seconds: 8, label: '8 sec', costWithAudio: 800, costSilent: 500 },
+    { seconds: 8, label: '8 sec (Reel)', costWithAudio: 800, costSilent: 500 },
     { seconds: 15, label: '15 sec', costWithAudio: 1500, costSilent: 1200 },
     { seconds: 30, label: '30 sec', costWithAudio: 2800, costSilent: 2500 },
   ],
@@ -25,6 +25,9 @@ export default function ScriptGeneratePage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [userCredits, setUserCredits] = useState(0);
+  const [isPreviewingVoice, setIsPreviewingVoice] = useState(false);
+  const [showReview, setShowReview] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -32,8 +35,7 @@ export default function ScriptGeneratePage() {
   );
   const router = useRouter();
 
-  // Auth check + load credits
-  useState(() => {
+  useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return router.push('/login');
@@ -41,7 +43,6 @@ export default function ScriptGeneratePage() {
       if (!user) return router.push('/login');
       setUser(user);
 
-      // Load credits from Supabase
       const { data } = await supabase
         .from('profiles')
         .select('credits')
@@ -51,11 +52,16 @@ export default function ScriptGeneratePage() {
       setLoadingUser(false);
     };
     init();
-  });
+  }, [supabase, router]);
 
   const selectedDuration = PRICING.durations.find(d => d.seconds === duration)!;
   const totalCost = withAudio ? selectedDuration.costWithAudio : selectedDuration.costSilent;
   const canAfford = userCredits >= totalCost;
+  
+  // Estimate: average speaking rate = ~150 words per minute
+  const wordCount = prompt.trim() ? prompt.trim().split(/\s+/).length : 0;
+  const estimatedSpeechSeconds = Math.ceil((wordCount / 150) * 60);
+  const scriptFits = estimatedSpeechSeconds <= duration;
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -64,14 +70,48 @@ export default function ScriptGeneratePage() {
     setImagePreview(URL.createObjectURL(file));
   };
 
+  const handlePreviewVoice = async () => {
+    if (!prompt.trim()) return toast.error('Write something first to preview');
+    if (!withAudio) return toast.info('Enable AI Voice first to hear a preview');
+    
+    setIsPreviewingVoice(true);
+    try {
+      // Browser built-in speech synthesis — FREE, no API cost
+      const utterance = new SpeechSynthesisUtterance(prompt);
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      window.speechSynthesis.speak(utterance);
+      toast.success('🔊 Speaking now...');
+    } catch {
+      toast.error('Voice preview not available on this browser');
+    } finally {
+      setIsPreviewingVoice(false);
+    }
+  };
+
+  const stopPreview = () => {
+    window.speechSynthesis.cancel();
+    setIsPreviewingVoice(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!showReview) {
+      setShowReview(true);
+      return;
+    }
+
     if (!prompt) return toast.error('Write your script first');
     if (!image) return toast.error('Upload a reference photo');
     if (!canAfford) return toast.error(`Need ₦${totalCost} — please top up`);
+    if (!scriptFits && withAudio) {
+      toast.warning(`Script may be too long — estimated ${estimatedSpeechSeconds}s vs ${duration}s selected`);
+    }
 
     setIsGenerating(true);
     setVideoUrl(null);
+    setShowReview(false);
 
     const formData = new FormData();
     formData.append('prompt', prompt);
@@ -84,12 +124,13 @@ export default function ScriptGeneratePage() {
       const res = await fetch('/api/generate-script-video', {
         method: 'POST',
         body: formData,
+        headers: { Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}` }
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed');
       setVideoUrl(data.videoUrl);
       setUserCredits(data.remainingCredits);
-      toast.success('Video created! 🎉');
+      toast.success('🎉 Your video is ready!');
     } catch (err: any) {
       toast.error(err.message || 'Something went wrong');
     } finally {
@@ -116,91 +157,192 @@ export default function ScriptGeneratePage() {
           </button>
 
           <h1 className="text-2xl font-bold mb-2">Photo + Script → Video</h1>
-          <p className="text-zinc-400 mb-6">Turn your story into a short video</p>
+          <p className="text-zinc-400 mb-6">Write your story, preview it, then create your video</p>
 
           {/* Balance */}
           <div className="mb-6 p-4 bg-zinc-900 rounded-xl border border-zinc-800 flex justify-between items-center">
-            <span>Your Balance: <strong className="text-emerald-400">₦{userCredits}</strong></span>
-            <button className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm">Top Up</button>
+            <span>Your Balance: <strong className="text-emerald-400 text-lg">₦{userCredits}</strong></span>
+            <button className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium">Top Up</button>
           </div>
 
           {!videoUrl ? (
-            <form onSubmit={handleSubmit} className="space-y-5">
-              {/* Image Upload */}
-              <div className="border-2 border-dashed border-zinc-700 rounded-xl p-6 text-center">
-                {imagePreview ? (
-                  <div className="relative">
-                    <img src={imagePreview} alt="Preview" className="max-h-64 mx-auto rounded-lg" />
-                    <button type="button" onClick={() => { setImage(null); setImagePreview(null); }}
-                      className="absolute top-2 right-2 bg-black/60 p-1 rounded-full">✕</button>
+            <>
+              {!showReview ? (
+                <form onSubmit={handleSubmit} className="space-y-5">
+                  {/* Image Upload */}
+                  <div className="border-2 border-dashed border-zinc-700 rounded-xl p-6 text-center">
+                    {imagePreview ? (
+                      <div className="relative">
+                        <img src={imagePreview} alt="Preview" className="max-h-64 mx-auto rounded-lg" />
+                        <button type="button" onClick={() => { setImage(null); setImagePreview(null); }}
+                          className="absolute top-2 right-2 bg-black/60 p-1 rounded-full hover:bg-black/80">✕</button>
+                      </div>
+                    ) : (
+                      <label className="cursor-pointer block">
+                        <Upload size={36} className="mx-auto text-zinc-500 mb-2" />
+                        <p className="text-zinc-400">Click to upload reference photo</p>
+                        <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                      </label>
+                    )}
                   </div>
-                ) : (
-                  <label className="cursor-pointer block">
-                    <Upload size={36} className="mx-auto text-zinc-500 mb-2" />
-                    <p className="text-zinc-400">Click to upload reference photo</p>
-                    <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
-                  </label>
-                )}
-              </div>
 
-              {/* Script */}
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Describe your video scene by scene..."
-                className="w-full h-36 p-4 bg-zinc-900 border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500"
-              />
+                  {/* Script */}
+                  <div>
+                    <label className="block mb-2 font-medium">Your Script</label>
+                    <textarea
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      placeholder="Describe your video scene by scene..."
+                      className="w-full h-36 p-4 bg-zinc-900 border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                    <div className="flex justify-between items-center mt-2 text-sm text-zinc-400">
+                      <span>{wordCount} words</span>
+                      {withAudio && wordCount > 0 && (
+                        <span className={scriptFits ? 'text-emerald-400' : 'text-amber-400'}>
+                          Est. {estimatedSpeechSeconds}s {scriptFits ? '✓ fits' : '⚠️ longer than selected'}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* Voice Preview */}
+                    {withAudio && (
+                      <div className="mt-3 flex gap-3">
+                        <button 
+                          type="button" 
+                          onClick={isPreviewingVoice ? stopPreview : handlePreviewVoice}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition ${
+                            isPreviewingVoice ? 'bg-red-600 hover:bg-red-500' : 'bg-violet-600/20 hover:bg-violet-600/40 text-violet-300'
+                          }`}
+                        >
+                          <Mic size={16} />
+                          {isPreviewingVoice ? 'Stop Preview' : '🔊 Preview Voice'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
-              {/* Duration */}
-              <div>
-                <label className="flex items-center gap-2 mb-3 font-medium">
-                  <Clock size={16} /> Video Length
-                </label>
-                <div className="grid grid-cols-3 gap-3">
-                  {PRICING.durations.map(opt => (
-                    <button key={opt.seconds} type="button" onClick={() => setDuration(opt.seconds)}
-                      className={`p-3 rounded-xl border transition ${
-                        duration === opt.seconds ? 'border-violet-500 bg-violet-500/10 text-violet-400' : 'border-zinc-800'
-                      }`}>
-                      <div className="font-bold">{opt.label}</div>
-                      <div className="text-xs text-zinc-400 mt-1">₦{opt.costWithAudio} / ₦{opt.costSilent}</div>
+                  {/* Duration */}
+                  <div>
+                    <label className="flex items-center gap-2 mb-3 font-medium">
+                      <Clock size={16} /> Video Length
+                    </label>
+                    <div className="grid grid-cols-3 gap-3">
+                      {PRICING.durations.map(opt => (
+                        <button key={opt.seconds} type="button" onClick={() => setDuration(opt.seconds)}
+                          className={`p-3 rounded-xl border transition ${
+                            duration === opt.seconds ? 'border-violet-500 bg-violet-500/10 text-violet-400' : 'border-zinc-800 hover:border-zinc-600'
+                          }`}>
+                          <div className="font-bold">{opt.label}</div>
+                          <div className="text-xs text-zinc-400 mt-1">₦{opt.costWithAudio} / ₦{opt.costSilent}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Audio Toggle */}
+                  <div className="flex items-center justify-between p-4 bg-zinc-900 rounded-xl border border-zinc-800">
+                    <div className="flex items-center gap-2">
+                      {withAudio ? <Volume2 size={18} className="text-violet-400" /> : <VolumeX size={18} className="text-zinc-500" />}
+                      <span>AI Voice & Background Music</span>
+                    </div>
+                    <button type="button" onClick={() => setWithAudio(!withAudio)}
+                      className={`w-12 h-7 rounded-full transition ${withAudio ? 'bg-violet-600' : 'bg-zinc-700'}`}>
+                      <div className={`w-5 h-5 bg-white rounded-full transition-transform ${withAudio ? 'translate-x-6' : 'translate-x-1'}`} />
                     </button>
-                  ))}
-                </div>
-              </div>
+                  </div>
 
-              {/* Audio Toggle */}
-              <div className="flex items-center justify-between p-4 bg-zinc-900 rounded-xl border border-zinc-800">
-                <div className="flex items-center gap-2">
-                  {withAudio ? <Volume2 size={18} className="text-violet-400" /> : <VolumeX size={18} className="text-zinc-500" />}
-                  <span>AI Voice & Sound</span>
+                  {/* Cost Summary */}
+                  <div className={`p-4 rounded-xl border ${canAfford ? 'bg-emerald-950/30 border-emerald-800' : 'bg-red-950/30 border-red-800'}`}>
+                    <div className="flex justify-between text-lg">
+                      <span>Cost:</span>
+                      <strong>₦{totalCost}</strong>
+                    </div>
+                    {!canAfford && <p className="text-red-400 text-sm mt-1">Need ₦{totalCost - userCredits} more — please top up</p>}
+                    {!scriptFits && withAudio && <p className="text-amber-400 text-sm mt-1">⚠️ Script may exceed selected duration</p>}
+                  </div>
+
+                  {/* Continue to Review */}
+                  <button type="submit" disabled={!image || !prompt.trim() || !canAfford}
+                    className="w-full py-4 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl font-bold flex items-center justify-center gap-2 transition">
+                    <Eye size={20} /> Review & Continue
+                  </button>
+                </form>
+              ) : (
+                // === REVIEW & CONFIRM STEP ===
+                <div className="space-y-6">
+                  <div className="text-center mb-4">
+                    <CheckCircle size={40} className="mx-auto text-emerald-400 mb-2" />
+                    <h2 className="text-xl font-bold">Review Your Project</h2>
+                    <p className="text-zinc-400 text-sm">Please confirm everything is correct before creating</p>
+                  </div>
+
+                  {/* Review Summary Card */}
+                  <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 space-y-4">
+                    <div>
+                      <span className="text-zinc-400 text-sm">Reference Photo</span>
+                      <img src={imagePreview!} alt="Review" className="w-full max-h-40 object-cover rounded-lg mt-2" />
+                    </div>
+                    
+                    <div>
+                      <span className="text-zinc-400 text-sm">Script</span>
+                      <p className="mt-1 text-sm bg-zinc-950 p-3 rounded-lg">{prompt}</p>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-zinc-400">Duration</span>
+                        <p className="font-semibold">{selectedDuration.label}</p>
+                      </div>
+                      <div>
+                        <span className="text-zinc-400">Audio</span>
+                        <p className="font-semibold">{withAudio ? '✅ With Voice' : '❌ Silent'}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="border-t border-zinc-800 pt-4 flex justify-between items-center">
+                      <span className="text-zinc-400">Your Balance: ₦{userCredits}</span>
+                      <span className="text-xl font-bold text-emerald-400">−₦{totalCost}</span>
+                    </div>
+                    
+                    <div className="flex justify-between items-center text-lg font-semibold">
+                      <span>After Creation</span>
+                      <span className="text-emerald-400">₦{userCredits - totalCost}</span>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-4">
+                    <button onClick={() => setShowReview(false)}
+                      className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition">
+                      ← Go Back
+                    </button>
+                    <button type="button" onClick={handleSubmit} disabled={isGenerating}
+                      className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl font-bold flex items-center justify-center gap-2 transition">
+                      {isGenerating ? (
+                        <><Loader2 size={18} className="animate-spin" /> Creating...</>
+                      ) : (
+                        <><Play size={18} /> Confirm & Create</>
+                      )}
+                    </button>
+                  </div>
                 </div>
-                <button type="button" onClick={() => setWithAudio(!withAudio)}
-                  className={`w-12 h-7 rounded-full transition ${withAudio ? 'bg-violet-600' : 'bg-zinc-700'}`}>
-                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${withAudio ? 'translate-x-6' : 'translate-x-1'}`} />
+              )}
+            </>
+          ) : (
+            // === RESULT: VIDEO READY ===
+            <div className="p-6 bg-zinc-900 rounded-xl border border-violet-700 text-center">
+              <h3 className="font-bold text-lg mb-4">✅ Your Video Is Ready</h3>
+              <video src={videoUrl} controls autoPlay loop className="w-full rounded-lg" />
+              <div className="mt-5 flex gap-3">
+                <button onClick={() => { setVideoUrl(null); setPrompt(''); setImage(null); setImagePreview(null); setShowReview(false); }}
+                  className="flex-1 py-3 bg-violet-600/20 hover:bg-violet-600/40 rounded-xl font-medium transition">
+                  Create Another
+                </button>
+                <button onClick={() => router.push('/dashboard')}
+                  className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition">
+                  Back to Dashboard
                 </button>
               </div>
-
-              {/* Cost Summary */}
-              <div className={`p-4 rounded-xl border ${canAfford ? 'bg-emerald-950/30 border-emerald-800' : 'bg-red-950/30 border-red-800'}`}>
-                <div className="flex justify-between text-lg">
-                  <span>Cost:</span>
-                  <strong>₦{totalCost}</strong>
-                </div>
-                {!canAfford && <p className="text-red-400 text-sm mt-1">Need ₦{totalCost - userCredits} more</p>}
-              </div>
-
-              <button type="submit" disabled={isGenerating || !canAfford}
-                className="w-full py-4 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl font-bold flex items-center justify-center gap-2">
-                {isGenerating ? <><Loader2 size={20} className="animate-spin" /> Creating...</> : <><Play size={20} /> Generate Video</>}
-              </button>
-            </form>
-          ) : (
-            <div className="p-6 bg-zinc-900 rounded-xl border border-violet-700 text-center">
-              <h3 className="font-bold text-lg mb-4">✅ Your Video</h3>
-              <video src={videoUrl} controls autoPlay loop className="w-full rounded-lg" />
-              <button onClick={() => { setVideoUrl(null); setPrompt(''); setImage(null); setImagePreview(null); }}
-                className="mt-5 px-6 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg">Create Another</button>
             </div>
           )}
         </div>

@@ -21,15 +21,20 @@ export default function SignUpPage() {
     const { data, error: err } = await supabase.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: `${window.location.origin}/` }
+      options: { emailRedirectTo: `${window.location.origin}/auth/confirmed` }
     });
 
     if (err) return setError(err.message);
     
     if (data.user?.identities?.length === 0) {
-      setMessage('Account already exists! Check your email or login below.');
+      setMessage('✅ Account already exists! Please check your email or sign in below.');
     } else {
-      setMessage('✅ Check your email to confirm your account');
+      setMessage(
+        '✅ Account created! Please check your email inbox. ' +
+        'You will receive a message from Supabase — click the link inside, ' +
+        'it will open in your browser and confirm your account. ' +
+        'Once confirmed, simply go to Sign In to get started.'
+      );
     }
   };
 
@@ -64,7 +69,7 @@ export default function SignUpPage() {
             />
           </div>
           {error && <p className="text-red-400 text-sm">{error}</p>}
-          {message && <p className="text-green-400 text-sm">{message}</p>}
+          {message && <p className="text-green-400 text-sm leading-relaxed">{message}</p>}
           <button
             type="submit"
             className="w-full py-3 bg-gradient-to-r from-violet-600 to-fuchsia-600 rounded-lg font-semibold hover:opacity-90"

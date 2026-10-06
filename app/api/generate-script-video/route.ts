@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { writeFile } from 'fs/promises';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -43,7 +41,8 @@ export async function POST(request: Request) {
       const bytes = await image.arrayBuffer();
       const buffer = Buffer.from(bytes);
       const ext = path.extname(image.name) || '.jpg';
-      const fileName = `${uuidv4()}${ext}`;
+      // No uuid — use timestamp + random string
+      const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`;
 
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('input-images')

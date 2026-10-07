@@ -13,8 +13,6 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-const ADMIN_EMAIL = 'Calibossmfr01@gmail.com';
-
 type DashboardStats = {
   totalUsers: number;
   totalVideos: number;
@@ -25,19 +23,21 @@ type DashboardStats = {
   totalCreditsSpent: number;
 };
 
+const emptyStats: DashboardStats = {
+  totalUsers: 0,
+  totalVideos: 0,
+  totalCredits: 0,
+  successfulDeposits: 0,
+  pendingDeposits: 0,
+  totalRevenue: 0,
+  totalCreditsSpent: 0,
+};
+
 export default function AdminPage() {
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState<DashboardStats>({
-    totalUsers: 0,
-    totalVideos: 0,
-    totalCredits: 0,
-    successfulDeposits: 0,
-    pendingDeposits: 0,
-    totalRevenue: 0,
-    totalCreditsSpent: 0,
-  });
-
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [stats, setStats] = useState<DashboardStats>(emptyStats);
 
   const router = useRouter();
 
@@ -48,6 +48,11 @@ export default function AdminPage() {
 
   const loadDashboard = async () => {
     try {
+      setError('');
+
+      /*
+       * First make sure there is a logged-in Supabase session.
+       */
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -57,103 +62,53 @@ export default function AdminPage() {
         return;
       }
 
-      // Only the designated administrator can access this page.
-      if (
-        session.user.email?.toLowerCase() !==
-        ADMIN_EMAIL.toLowerCase()
-      ) {
+      /*
+       * The actual admin authorization is handled again
+       * inside /api/admin/stats.
+       *
+       * The browser never receives the service-role key.
+       */
+      const response = await fetch('/api/admin/stats', {
+        method: 'GET',
+        cache: 'no-store',
+      });
+
+      const data = await response.json();
+
+      if (response.status === 401) {
+        router.replace('/admin/login');
+        return;
+      }
+
+      if (response.status === 403) {
         await supabase.auth.signOut();
         router.replace('/admin/login?error=unauthorized');
         return;
       }
 
-      // -----------------------------
-      // TOTAL USERS
-      // -----------------------------
-      const { count: totalUsers } = await supabase
-        .from('profiles')
-        .select('*', {
-          count: 'exact',
-          head: true,
-        });
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+            'Unable to load admin statistics.'
+        );
+      }
 
-      // -----------------------------
-      // TOTAL VIDEOS
-      // -----------------------------
-      const { count: totalVideos } = await supabase
-        .from('user_videos')
-        .select('*', {
-          count: 'exact',
-          head: true,
-        });
+      if (!data?.success || !data?.stats) {
+        throw new Error(
+          'Invalid statistics response.'
+        );
+      }
 
-      // -----------------------------
-      // CREDITS CURRENTLY HELD
-      // -----------------------------
-      const { data: profileCredits } = await supabase
-        .from('profiles')
-        .select('credits');
-
-      const totalCredits =
-        profileCredits?.reduce(
-          (sum, profile) => sum + (profile.credits || 0),
-          0
-        ) || 0;
-
-      // -----------------------------
-      // SUCCESSFUL DEPOSITS
-      // -----------------------------
-      const { data: successfulDeposits } = await supabase
-        .from('wallet_deposits')
-        .select('amount')
-        .eq('status', 'successful');
-
-      const totalRevenue =
-        successfulDeposits?.reduce(
-          (sum, deposit) =>
-            sum + Number(deposit.amount || 0),
-          0
-        ) || 0;
-
-      // -----------------------------
-      // PENDING DEPOSITS
-      // -----------------------------
-      const { count: pendingDeposits } = await supabase
-        .from('wallet_deposits')
-        .select('*', {
-          count: 'exact',
-          head: true,
-        })
-        .eq('status', 'pending');
-
-      // -----------------------------
-      // TOTAL CREDITS SPENT
-      // -----------------------------
-      const { data: videos } = await supabase
-        .from('user_videos')
-        .select('cost');
-
-      const totalCreditsSpent =
-        videos?.reduce(
-          (sum, video) =>
-            sum + (video.cost || 0),
-          0
-        ) || 0;
-
-      setStats({
-        totalUsers: totalUsers || 0,
-        totalVideos: totalVideos || 0,
-        totalCredits,
-        successfulDeposits:
-          successfulDeposits?.length || 0,
-        pendingDeposits: pendingDeposits || 0,
-        totalRevenue,
-        totalCreditsSpent,
-      });
-    } catch (error) {
+      setStats(data.stats);
+    } catch (err: any) {
       console.error(
         'Admin dashboard error:',
-        error
+        err
+      );
+
+      setError(
+        err?.message ||
+          'Unable to load admin dashboard.'
       );
     } finally {
       setLoading(false);
@@ -180,6 +135,7 @@ export default function AdminPage() {
       <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center">
         <div className="text-center">
           <div className="w-10 h-10 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mx-auto mb-4" />
+
           <p className="text-zinc-400">
             Loading admin dashboard...
           </p>
@@ -223,6 +179,7 @@ export default function AdminPage() {
                     : ''
                 }
               />
+
               Refresh
             </button>
 
@@ -231,6 +188,7 @@ export default function AdminPage() {
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-950/40 border border-red-900/50 text-red-400 hover:bg-red-900/40 transition"
             >
               <LogOut size={16} />
+
               Logout
             </button>
 
@@ -251,6 +209,19 @@ export default function AdminPage() {
             video generation.
           </p>
         </div>
+
+        {/* ERROR */}
+        {error && (
+          <div className="mb-6 rounded-xl border border-red-800 bg-red-950/40 px-5 py-4 text-red-300">
+            <p className="font-medium">
+              Dashboard error
+            </p>
+
+            <p className="text-sm mt-1">
+              {error}
+            </p>
+          </div>
+        )}
 
         {/* MAIN METRICS */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-6">

@@ -635,7 +635,7 @@ export default function GenerateScriptVideoPage() {
               <div className="h-2 w-2 rounded-full bg-purple-500" />
 
               <span className="text-sm font-medium text-purple-300">
-                VidForge AI
+                
               </span>
             </div>
 

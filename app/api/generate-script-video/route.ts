@@ -16,6 +16,9 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+const SUPABASE_ANON_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
 const VIDEO_MODEL = "google/veo-3.1-lite";
 
 const OPENROUTER_BASE_URL =
@@ -23,19 +26,14 @@ const OPENROUTER_BASE_URL =
 
 const INPUT_BUCKET = "input-images";
 
+const MAX_IMAGE_SIZE =
+  10 * 1024 * 1024;
+
 /*
 |--------------------------------------------------------------------------
-| SUPABASE
+| SUPABASE SERVER CLIENT
 |--------------------------------------------------------------------------
 */
-
-if (!SUPABASE_URL) {
-  console.error("Missing NEXT_PUBLIC_SUPABASE_URL");
-}
-
-if (!SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("Missing SUPABASE_SERVICE_ROLE_KEY");
-}
 
 const supabaseAdmin =
   SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -86,7 +84,42 @@ function json(
   data: Record<string, any>,
   status = 200
 ) {
-  return NextResponse.json(data, { status });
+  return NextResponse.json(data, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function getErrorMessage(
+  error: any,
+  fallback: string
+) {
+  if (!error) {
+    return fallback;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (typeof error.message === "string") {
+    return error.message;
+  }
+
+  if (typeof error.error === "string") {
+    return error.error;
+  }
+
+  if (
+    error.error &&
+    typeof error.error.message === "string"
+  ) {
+    return error.error.message;
+  }
+
+  return fallback;
 }
 
 /*
@@ -174,6 +207,11 @@ async function getUserCredits(
 |--------------------------------------------------------------------------
 | DEDUCT CREDITS
 |--------------------------------------------------------------------------
+|
+| Uses the current balance in the WHERE clause so that two
+| simultaneous generations cannot both overwrite the same
+| balance accidentally.
+|--------------------------------------------------------------------------
 */
 
 async function deductCredits(
@@ -231,6 +269,63 @@ async function deductCredits(
     remainingCredits:
       Number(data.credits ?? 0),
   };
+}
+
+/*
+|--------------------------------------------------------------------------
+| REFUND CREDITS
+|--------------------------------------------------------------------------
+*/
+
+async function refundCredits(
+  userId: string,
+  amount: number
+) {
+  if (!supabaseAdmin) {
+    throw new Error(
+      "Supabase server configuration is missing."
+    );
+  }
+
+  if (!amount || amount <= 0) {
+    return await getUserCredits(userId);
+  }
+
+  const currentCredits =
+    await getUserCredits(userId);
+
+  const refundedCredits =
+    currentCredits + amount;
+
+  const { data, error } =
+    await supabaseAdmin
+      .from("profiles")
+      .update({
+        credits: refundedCredits,
+      })
+      .eq("id", userId)
+      .eq("credits", currentCredits)
+      .select("credits")
+      .maybeSingle();
+
+  if (error) {
+    console.error(
+      "Credit refund failed:",
+      error
+    );
+
+    return currentCredits;
+  }
+
+  if (!data) {
+    console.error(
+      "Credit refund was blocked because the balance changed."
+    );
+
+    return await getUserCredits(userId);
+  }
+
+  return Number(data.credits ?? 0);
 }
 
 /*
@@ -366,6 +461,10 @@ async function uploadInputImage(
         {
           contentType:
             file.type || "image/jpeg",
+
+          cacheControl:
+            "31536000",
+
           upsert: false,
         }
       );
@@ -389,23 +488,26 @@ async function uploadInputImage(
     );
   }
 
-  return publicUrlData.publicUrl;
+  return {
+    path: filename,
+    url: publicUrlData.publicUrl,
+  };
 }
 
 /*
 |--------------------------------------------------------------------------
-| CREATE PENDING VIDEO RECORD
+| CREATE VIDEO RECORD
 |--------------------------------------------------------------------------
 |
-| The uploaded image is saved in image_url.
+| We create the record BEFORE contacting OpenRouter.
 |
-| The video initially uses:
+| Initial state:
+|
+| pending:submitting
+|
+| After OpenRouter accepts the job:
 |
 | pending:<jobId>
-|
-| Once generation completes it becomes:
-|
-| /api/generate-script-video?jobId=...&download=true
 |
 |--------------------------------------------------------------------------
 */
@@ -417,7 +519,6 @@ async function createPendingVideoRecord({
   duration,
   cost,
   withAudio,
-  jobId,
 }: {
   userId: string;
   prompt: string;
@@ -425,8 +526,48 @@ async function createPendingVideoRecord({
   duration: number;
   cost: number;
   withAudio: boolean;
-  jobId: string;
 }) {
+  if (!supabaseAdmin) {
+    throw new Error(
+      "Supabase server configuration is missing."
+    );
+  }
+
+  const { data, error } =
+    await supabaseAdmin
+      .from("user_videos")
+      .insert({
+        user_id: userId,
+        prompt,
+        image_url: imageUrl,
+        video_url: "pending:submitting",
+        duration,
+        cost,
+        has_audio: withAudio,
+      })
+      .select("id")
+      .single();
+
+  if (error) {
+    throw new Error(
+      `Unable to create video record: ${error.message}`
+    );
+  }
+
+  return data;
+}
+
+/*
+|--------------------------------------------------------------------------
+| UPDATE RECORD TO OPENROUTER JOB
+|--------------------------------------------------------------------------
+*/
+
+async function attachJobToVideoRecord(
+  userId: string,
+  recordId: string,
+  jobId: string
+) {
   if (!supabaseAdmin) {
     throw new Error(
       "Supabase server configuration is missing."
@@ -436,36 +577,60 @@ async function createPendingVideoRecord({
   const { error } =
     await supabaseAdmin
       .from("user_videos")
-      .insert({
-        user_id: userId,
-        prompt,
-        image_url: imageUrl,
-        video_url: `pending:${jobId}`,
-        duration,
-        cost,
-        has_audio: withAudio,
-      });
+      .update({
+        video_url:
+          `pending:${jobId}`,
+      })
+      .eq("id", recordId)
+      .eq("user_id", userId);
 
   if (error) {
     throw new Error(
-      `Unable to create video record: ${error.message}`
+      `Unable to save OpenRouter job ID: ${error.message}`
     );
   }
 }
 
 /*
 |--------------------------------------------------------------------------
-| UPDATE VIDEO RECORD
+| MARK VIDEO FAILED
 |--------------------------------------------------------------------------
 */
 
-async function updateVideoRecord(
+async function markVideoFailed(
   userId: string,
-  jobId: string,
-  videoUrl: string
+  recordId: string,
+  jobId: string
 ) {
   if (!supabaseAdmin) {
     return;
+  }
+
+  await supabaseAdmin
+    .from("user_videos")
+    .update({
+      video_url:
+        `failed:${jobId}`,
+    })
+    .eq("id", recordId)
+    .eq("user_id", userId);
+}
+
+/*
+|--------------------------------------------------------------------------
+| MARK VIDEO COMPLETED
+|--------------------------------------------------------------------------
+*/
+
+async function markVideoCompleted(
+  userId: string,
+  recordId: string,
+  videoUrl: string
+) {
+  if (!supabaseAdmin) {
+    throw new Error(
+      "Supabase server configuration is missing."
+    );
   }
 
   const { error } =
@@ -474,23 +639,19 @@ async function updateVideoRecord(
       .update({
         video_url: videoUrl,
       })
-      .eq("user_id", userId)
-      .eq(
-        "video_url",
-        `pending:${jobId}`
-      );
+      .eq("id", recordId)
+      .eq("user_id", userId);
 
   if (error) {
-    console.error(
-      "Unable to update user_videos:",
-      error
+    throw new Error(
+      `Unable to save completed video URL: ${error.message}`
     );
   }
 }
 
 /*
 |--------------------------------------------------------------------------
-| FIND USER'S JOB
+| FIND USER JOB
 |--------------------------------------------------------------------------
 */
 
@@ -504,16 +665,9 @@ async function findUserJob(
     );
   }
 
-  const pendingMarker =
-    `pending:${jobId}`;
-
-  const failedMarker =
-    `failed:${jobId}`;
-
-  const proxyUrl =
-    `/api/generate-script-video?jobId=${encodeURIComponent(
-      jobId
-    )}&download=true`;
+  /*
+   * Pending job.
+   */
 
   const { data: pending } =
     await supabaseAdmin
@@ -522,28 +676,20 @@ async function findUserJob(
       .eq("user_id", userId)
       .eq(
         "video_url",
-        pendingMarker
+        `pending:${jobId}`
       )
       .maybeSingle();
 
   if (pending) {
-    return pending;
+    return {
+      record: pending,
+      state: "pending" as const,
+    };
   }
 
-  const { data: completed } =
-    await supabaseAdmin
-      .from("user_videos")
-      .select("*")
-      .eq("user_id", userId)
-      .eq(
-        "video_url",
-        proxyUrl
-      )
-      .maybeSingle();
-
-  if (completed) {
-    return completed;
-  }
+  /*
+   * Failed job.
+   */
 
   const { data: failed } =
     await supabaseAdmin
@@ -552,11 +698,47 @@ async function findUserJob(
       .eq("user_id", userId)
       .eq(
         "video_url",
-        failedMarker
+        `failed:${jobId}`
       )
       .maybeSingle();
 
-  return failed ?? null;
+  if (failed) {
+    return {
+      record: failed,
+      state: "failed" as const,
+    };
+  }
+
+  /*
+   * Completed job.
+   *
+   * The generated file path contains the OpenRouter job ID:
+   *
+   * generated-videos/<userId>/<jobId>.mp4
+   */
+
+  const { data: completedRows } =
+    await supabaseAdmin
+      .from("user_videos")
+      .select("*")
+      .eq("user_id", userId)
+      .like(
+        "video_url",
+        `%/${jobId}.mp4`
+      )
+      .limit(1);
+
+  const completed =
+    completedRows?.[0];
+
+  if (completed) {
+    return {
+      record: completed,
+      state: "completed" as const,
+    };
+  }
+
+  return null;
 }
 
 /*
@@ -590,17 +772,172 @@ function openRouterHeaders() {
 
 /*
 |--------------------------------------------------------------------------
+| DOWNLOAD VIDEO FROM OPENROUTER
+|--------------------------------------------------------------------------
+|
+| OpenRouter returns unsigned_urls when the job completes.
+| We also have the documented /content endpoint as fallback.
+|--------------------------------------------------------------------------
+*/
+
+async function downloadOpenRouterVideo(
+  jobId: string,
+  unsignedUrl?: string
+) {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error(
+      "OPENROUTER_API_KEY is missing."
+    );
+  }
+
+  const urls: string[] = [];
+
+  if (unsignedUrl) {
+    urls.push(unsignedUrl);
+  }
+
+  urls.push(
+    `${OPENROUTER_BASE_URL}/videos/${encodeURIComponent(
+      jobId
+    )}/content?index=0`
+  );
+
+  let lastError =
+    "Unable to retrieve generated video.";
+
+  for (const url of urls) {
+    try {
+      const response =
+        await fetch(url, {
+          method: "GET",
+
+          headers: {
+            Authorization:
+              `Bearer ${OPENROUTER_API_KEY}`,
+          },
+
+          cache: "no-store",
+        });
+
+      if (!response.ok) {
+        const text =
+          await response
+            .text()
+            .catch(() => "");
+
+        lastError =
+          `Video download failed (${response.status}): ${text}`;
+
+        continue;
+      }
+
+      const buffer =
+        Buffer.from(
+          await response.arrayBuffer()
+        );
+
+      if (!buffer.length) {
+        lastError =
+          "OpenRouter returned an empty video.";
+
+        continue;
+      }
+
+      return {
+        buffer,
+        contentType:
+          response.headers.get(
+            "content-type"
+          ) || "video/mp4",
+      };
+    } catch (error: any) {
+      lastError =
+        error?.message ||
+        lastError;
+    }
+  }
+
+  throw new Error(lastError);
+}
+
+/*
+|--------------------------------------------------------------------------
+| SAVE GENERATED VIDEO TO SUPABASE
+|--------------------------------------------------------------------------
+*/
+
+async function saveGeneratedVideo(
+  userId: string,
+  jobId: string,
+  videoBuffer: Buffer,
+  contentType: string
+) {
+  if (!supabaseAdmin) {
+    throw new Error(
+      "Supabase server configuration is missing."
+    );
+  }
+
+  const videoPath =
+    `generated-videos/${userId}/${jobId}.mp4`;
+
+  const { error } =
+    await supabaseAdmin.storage
+      .from(INPUT_BUCKET)
+      .upload(
+        videoPath,
+        videoBuffer,
+        {
+          contentType:
+            contentType.includes("video")
+              ? contentType
+              : "video/mp4",
+
+          cacheControl:
+            "31536000",
+
+          upsert: true,
+        }
+      );
+
+  if (error) {
+    throw new Error(
+      `Unable to save generated video: ${error.message}`
+    );
+  }
+
+  const {
+    data: publicUrlData,
+  } =
+    supabaseAdmin.storage
+      .from(INPUT_BUCKET)
+      .getPublicUrl(videoPath);
+
+  if (!publicUrlData?.publicUrl) {
+    throw new Error(
+      "Generated video was saved, but its public URL could not be created."
+    );
+  }
+
+  return publicUrlData.publicUrl;
+}
+
+/*
+|--------------------------------------------------------------------------
 | POST
 |--------------------------------------------------------------------------
 |
-| Starts asynchronous Veo generation.
-|
+| Starts an asynchronous OpenRouter video generation.
 |--------------------------------------------------------------------------
 */
 
 export async function POST(
   request: NextRequest
 ) {
+  let userId: string | null = null;
+  let recordId: string | null = null;
+  let chargedCost = 0;
+
   try {
     if (!OPENROUTER_API_KEY) {
       return json(
@@ -623,7 +960,7 @@ export async function POST(
     }
 
     /*
-     * Authenticate user.
+     * Authenticate.
      */
 
     const user =
@@ -639,8 +976,10 @@ export async function POST(
       );
     }
 
+    userId = user.id;
+
     /*
-     * Read multipart form.
+     * Read form.
      */
 
     const formData =
@@ -702,11 +1041,22 @@ export async function POST(
       );
     }
 
-    if (!imageValue.type.startsWith("image/")) {
+    const allowedImageTypes = [
+      "image/jpeg",
+      "image/jpg",
+      "image/png",
+      "image/webp",
+    ];
+
+    if (
+      !allowedImageTypes.includes(
+        imageValue.type
+      )
+    ) {
       return json(
         {
           error:
-            "The uploaded file must be an image.",
+            "Please upload a JPG, PNG, or WebP image.",
         },
         400
       );
@@ -714,7 +1064,7 @@ export async function POST(
 
     if (
       imageValue.size >
-      10 * 1024 * 1024
+      MAX_IMAGE_SIZE
     ) {
       return json(
         {
@@ -759,7 +1109,7 @@ export async function POST(
       "true";
 
     /*
-     * Server-side pricing.
+     * Calculate server-side cost.
      */
 
     const cost =
@@ -767,8 +1117,10 @@ export async function POST(
         ? PRICING[duration].audio
         : PRICING[duration].silent;
 
+    chargedCost = cost;
+
     /*
-     * Check credits before starting provider job.
+     * Check credits.
      */
 
     const currentCredits =
@@ -779,7 +1131,10 @@ export async function POST(
         {
           error:
             `You need ${cost} credits, but you only have ${currentCredits}.`,
-          requiredCredits: cost,
+
+          requiredCredits:
+            cost,
+
           remainingCredits:
             currentCredits,
         },
@@ -788,17 +1143,40 @@ export async function POST(
     }
 
     /*
-     * Upload image.
+     * Upload original image.
      */
 
-    const imageUrl =
+    const uploadedImage =
       await uploadInputImage(
         imageValue,
         user.id
       );
 
     /*
-     * Build Veo prompt.
+     * Create DB record BEFORE provider request.
+     */
+
+    const videoRecord =
+      await createPendingVideoRecord({
+        userId: user.id,
+
+        prompt,
+
+        imageUrl:
+          uploadedImage.url,
+
+        duration,
+
+        cost,
+
+        withAudio,
+      });
+
+    recordId =
+      videoRecord.id;
+
+    /*
+     * Build prompt.
      */
 
     const veoPrompt =
@@ -809,77 +1187,139 @@ export async function POST(
 
     /*
      * ------------------------------------------------------
-     * OPENROUTER VIDEO REQUEST
+     * DEDUCT VIDFORGE CREDITS
      * ------------------------------------------------------
      *
-     * IMPORTANT FIX:
+     * We deduct immediately before submitting the paid
+     * provider request.
      *
-     * frame_images MUST be an ARRAY.
-     *
-     * Correct:
-     *
-     * frame_images: [
-     *   {
-     *     type: "image_url",
-     *     image_url: {
-     *       url: imageUrl
-     *     },
-     *     frame_type: "first_frame"
-     *   }
-     * ]
-     *
-     * This fixes:
-     *
-     * "Invalid input: expected array,
-     *  received object"
+     * If OpenRouter rejects the request, credits are refunded.
+     * If generation later fails, GET refunds them.
+     */
+
+    const creditResult =
+      await deductCredits(
+        user.id,
+        cost
+      );
+
+    if (!creditResult.success) {
+      await supabaseAdmin
+        .from("user_videos")
+        .delete()
+        .eq("id", recordId)
+        .eq("user_id", user.id);
+
+      return json(
+        {
+          error:
+            "Your credit balance changed before generation started. Please try again.",
+
+          remainingCredits:
+            creditResult.remainingCredits,
+        },
+        402
+      );
+    }
+
+    /*
+     * ------------------------------------------------------
+     * OPENROUTER VIDEO SUBMISSION
      * ------------------------------------------------------
      */
 
-    const openRouterResponse =
-      await fetch(
-        `${OPENROUTER_BASE_URL}/videos`,
-        {
-          method: "POST",
+    let openRouterResponse:
+      Response;
 
-          headers:
-            openRouterHeaders(),
+    let openRouterData:
+      any;
 
-          body: JSON.stringify({
-            model: VIDEO_MODEL,
+    try {
+      openRouterResponse =
+        await fetch(
+          `${OPENROUTER_BASE_URL}/videos`,
+          {
+            method: "POST",
 
-            prompt: veoPrompt,
+            headers:
+              openRouterHeaders(),
 
-            duration,
+            body: JSON.stringify({
+              model:
+                VIDEO_MODEL,
 
-            resolution: "720p",
+              prompt:
+                veoPrompt,
 
-            aspect_ratio: "9:16",
+              duration,
 
-            generate_audio:
-              withAudio,
+              resolution:
+                "720p",
 
-            frame_images: [
-              {
-                type: "image_url",
+              aspect_ratio:
+                "9:16",
 
-                image_url: {
-                  url: imageUrl,
+              generate_audio:
+                withAudio,
+
+              /*
+               * IMPORTANT:
+               * frame_images MUST be an array.
+               */
+
+              frame_images: [
+                {
+                  type:
+                    "image_url",
+
+                  image_url: {
+                    url:
+                      uploadedImage.url,
+                  },
+
+                  frame_type:
+                    "first_frame",
                 },
+              ],
+            }),
 
-                frame_type:
-                  "first_frame",
-              },
-            ],
-          }),
+            cache: "no-store",
+          }
+        );
 
-          cache: "no-store",
-        }
+      openRouterData =
+        await openRouterResponse
+          .json()
+          .catch(() => null);
+    } catch (providerNetworkError: any) {
+      console.error(
+        "OpenRouter request failed:",
+        providerNetworkError
       );
 
-    const openRouterData =
-      await openRouterResponse
-        .json()
-        .catch(() => null);
+      await markVideoFailed(
+        user.id,
+        recordId,
+        "submission"
+      );
+
+      const refundedCredits =
+        await refundCredits(
+          user.id,
+          cost
+        );
+
+      return json(
+        {
+          error:
+            "OpenRouter could not be reached. Your credits have been refunded.",
+
+          remainingCredits:
+            refundedCredits,
+        },
+        502
+      );
+    }
 
     /*
      * Provider rejected request.
@@ -891,37 +1331,44 @@ export async function POST(
         openRouterData
       );
 
+      await markVideoFailed(
+        user.id,
+        recordId,
+        "submission"
+      );
+
+      const refundedCredits =
+        await refundCredits(
+          user.id,
+          cost
+        );
+
       const providerError =
         openRouterData?.error;
 
-      let errorMessage =
-        "OpenRouter could not start the video generation.";
-
-      if (
-        typeof providerError ===
-        "string"
-      ) {
-        errorMessage =
-          providerError;
-      } else if (
-        providerError?.message
-      ) {
-        errorMessage =
-          providerError.message;
-      }
+      const errorMessage =
+        getErrorMessage(
+          providerError,
+          "OpenRouter could not start the video generation."
+        );
 
       return json(
         {
-          error: errorMessage,
+          error:
+            `${errorMessage} Your VidForge credits have been refunded.`,
+
           providerStatus:
             openRouterResponse.status,
+
+          remainingCredits:
+            refundedCredits,
         },
         502
       );
     }
 
     /*
-     * Get OpenRouter job ID.
+     * Get provider job ID.
      */
 
     const jobId =
@@ -933,85 +1380,71 @@ export async function POST(
         openRouterData
       );
 
+      await markVideoFailed(
+        user.id,
+        recordId,
+        "no-job-id"
+      );
+
+      const refundedCredits =
+        await refundCredits(
+          user.id,
+          cost
+        );
+
       return json(
         {
           error:
-            "OpenRouter returned an unexpected response without a job ID.",
+            "OpenRouter returned an unexpected response. Your VidForge credits have been refunded.",
+
+          remainingCredits:
+            refundedCredits,
         },
         502
       );
     }
 
     /*
-     * Create database history record BEFORE charging.
+     * Save job ID immediately.
      */
 
     try {
-      await createPendingVideoRecord({
-        userId: user.id,
-        prompt,
-        imageUrl,
-        duration,
-        cost,
-        withAudio,
-        jobId,
-      });
+      await attachJobToVideoRecord(
+        user.id,
+        recordId,
+        jobId
+      );
     } catch (databaseError: any) {
+      /*
+       * The provider has accepted the job.
+       *
+       * DO NOT automatically refund here because the provider
+       * job already exists and may still generate a video.
+       */
+
       console.error(
-        "Could not create pending video record:",
+        "Could not save OpenRouter job ID:",
         databaseError
       );
 
       return json(
         {
           error:
-            "The video job started, but VidForge could not save the job record. Please contact support before trying again.",
+            "The video generation was accepted, but VidForge could not save its job ID. Please contact support before starting another generation.",
+
+          jobId,
+
+          remainingCredits:
+            creditResult.remainingCredits,
         },
         500
       );
     }
 
     /*
-     * Deduct credits.
-     */
-
-    const creditResult =
-      await deductCredits(
-        user.id,
-        cost
-      );
-
-    if (!creditResult.success) {
-      /*
-       * Provider job already exists.
-       * Mark our history record as failed.
-       */
-
-      await supabaseAdmin
-        .from("user_videos")
-        .update({
-          video_url:
-            `failed:${jobId}`,
-        })
-        .eq("user_id", user.id)
-        .eq(
-          "video_url",
-          `pending:${jobId}`
-        );
-
-      return json(
-        {
-          error:
-            "Your credit balance changed before the generation could be charged. Please try again.",
-          remainingCredits:
-            creditResult.remainingCredits,
-        },
-        402
-      );
-    }
-
-    /*
-     * Return job information to frontend.
+     * Return immediately.
+     *
+     * Frontend will poll GET using jobId.
      */
 
     return json({
@@ -1020,7 +1453,7 @@ export async function POST(
       jobId,
 
       status:
-        openRouterData.status ||
+        openRouterData?.status ||
         "pending",
 
       pollingUrl:
@@ -1043,6 +1476,59 @@ export async function POST(
       error
     );
 
+    /*
+     * If we charged credits but never got a provider job,
+     * refund them.
+     */
+
+    if (
+      userId &&
+      recordId &&
+      chargedCost > 0
+    ) {
+      try {
+        const { data: record } =
+          await supabaseAdmin!
+            .from("user_videos")
+            .select(
+              "video_url"
+            )
+            .eq("id", recordId)
+            .eq("user_id", userId)
+            .maybeSingle();
+
+        /*
+         * Only refund records still sitting in the initial
+         * submitting state.
+         *
+         * If it already contains an OpenRouter job ID,
+         * leave the credits alone because the provider job
+         * exists.
+         */
+
+        if (
+          record?.video_url ===
+          "pending:submitting"
+        ) {
+          await markVideoFailed(
+            userId,
+            recordId,
+            "server-error"
+          );
+
+          await refundCredits(
+            userId,
+            chargedCost
+          );
+        }
+      } catch (refundError) {
+        console.error(
+          "Emergency refund failed:",
+          refundError
+        );
+      }
+    }
+
     return json(
       {
         error:
@@ -1059,13 +1545,16 @@ export async function POST(
 | GET
 |--------------------------------------------------------------------------
 |
-| TWO MODES:
+| Frontend calls this repeatedly:
 |
-| 1. Normal GET:
-|    Poll OpenRouter job status.
+| GET /api/generate-script-video?jobId=...
 |
-| 2. ?download=true:
-|    Stream completed MP4 through VidForge.
+| Once completed:
+|
+| 1. Download MP4 from OpenRouter
+| 2. Save MP4 into Supabase input-images bucket
+| 3. Update user_videos.video_url
+| 4. Return the permanent Supabase URL
 |
 |--------------------------------------------------------------------------
 */
@@ -1132,16 +1621,16 @@ export async function GET(
     }
 
     /*
-     * Verify ownership.
+     * Verify this job belongs to the logged-in user.
      */
 
-    const userJob =
+    const foundJob =
       await findUserJob(
         user.id,
         jobId
       );
 
-    if (!userJob) {
+    if (!foundJob) {
       return json(
         {
           error:
@@ -1151,8 +1640,92 @@ export async function GET(
       );
     }
 
+    const userJob =
+      foundJob.record;
+
     /*
-     * Poll OpenRouter.
+     * ------------------------------------------------------
+     * ALREADY FAILED
+     * ------------------------------------------------------
+     *
+     * Important:
+     * Do NOT refund again.
+     */
+
+    if (
+      foundJob.state ===
+      "failed"
+    ) {
+      const currentCredits =
+        await getUserCredits(
+          user.id
+        );
+
+      return json({
+        success: false,
+
+        status:
+          "failed",
+
+        jobId,
+
+        error:
+          "This video generation failed. Your credits were refunded.",
+
+        remainingCredits:
+          currentCredits,
+      });
+    }
+
+    /*
+     * ------------------------------------------------------
+     * ALREADY COMPLETED
+     * ------------------------------------------------------
+     */
+
+    if (
+      foundJob.state ===
+      "completed"
+    ) {
+      const savedVideoUrl =
+        userJob.video_url;
+
+      /*
+       * If ?download=true was requested,
+       * redirect directly to the saved Supabase MP4.
+       */
+
+      if (download) {
+        return NextResponse.redirect(
+          savedVideoUrl
+        );
+      }
+
+      const currentCredits =
+        await getUserCredits(
+          user.id
+        );
+
+      return json({
+        success: true,
+
+        status:
+          "completed",
+
+        jobId,
+
+        videoUrl:
+          savedVideoUrl,
+
+        remainingCredits:
+          currentCredits,
+      });
+    }
+
+    /*
+     * ------------------------------------------------------
+     * POLL OPENROUTER
+     * ------------------------------------------------------
      */
 
     const openRouterResponse =
@@ -1177,6 +1750,13 @@ export async function GET(
         .json()
         .catch(() => null);
 
+    /*
+     * Temporary polling/provider problem.
+     *
+     * DO NOT refund because the actual generation may
+     * still be running.
+     */
+
     if (!openRouterResponse.ok) {
       console.error(
         "OpenRouter polling error:",
@@ -1186,9 +1766,15 @@ export async function GET(
       return json(
         {
           error:
-            openRouterData?.error?.message ||
-            openRouterData?.error ||
-            "Unable to check video status.",
+            getErrorMessage(
+              openRouterData?.error,
+              "Unable to check video status. Please try again."
+            ),
+
+          status:
+            "polling_error",
+
+          jobId,
         },
         502
       );
@@ -1200,7 +1786,7 @@ export async function GET(
 
     /*
      * ------------------------------------------------------
-     * FAILED
+     * PROVIDER GENERATION FAILED
      * ------------------------------------------------------
      */
 
@@ -1209,21 +1795,26 @@ export async function GET(
       status === "cancelled" ||
       status === "expired"
     ) {
-      await supabaseAdmin
-        .from("user_videos")
-        .update({
-          video_url:
-            `failed:${jobId}`,
-        })
-        .eq("user_id", user.id)
-        .eq(
-          "video_url",
-          `pending:${jobId}`
-        );
+      await markVideoFailed(
+        user.id,
+        userJob.id,
+        jobId
+      );
 
-      const currentCredits =
-        await getUserCredits(
-          user.id
+      const cost =
+        Number(userJob.cost ?? 0);
+
+      /*
+       * Refund exactly once.
+       *
+       * We only reach this branch while the database record
+       * is still pending.
+       */
+
+      const refundedCredits =
+        await refundCredits(
+          user.id,
+          cost
         );
 
       return json({
@@ -1231,12 +1822,16 @@ export async function GET(
 
         status,
 
+        jobId,
+
         error:
-          openRouterData?.error ||
-          "The video generation failed.",
+          getErrorMessage(
+            openRouterData?.error,
+            `Video generation ${status}. Your credits have been refunded.`
+          ),
 
         remainingCredits:
-          currentCredits,
+          refundedCredits,
       });
     }
 
@@ -1247,7 +1842,8 @@ export async function GET(
      */
 
     if (
-      status !== "completed"
+      status !==
+        "completed"
     ) {
       const currentCredits =
         await getUserCredits(
@@ -1279,80 +1875,202 @@ export async function GET(
         ? openRouterData.unsigned_urls
         : [];
 
-    const contentUrl =
+    const providerVideoUrl =
       unsignedUrls[0];
 
-    const fallbackUrl =
-      openRouterData?.video_url ||
-      openRouterData?.output?.video ||
-      openRouterData?.output?.url ||
-      null;
+    /*
+     * Retrieve completed MP4.
+     */
 
-    const providerVideoUrl =
-      contentUrl ||
-      fallbackUrl;
+    let downloadedVideo;
 
-    if (!providerVideoUrl) {
+    try {
+      downloadedVideo =
+        await downloadOpenRouterVideo(
+          jobId,
+          providerVideoUrl
+        );
+    } catch (downloadError: any) {
       console.error(
-        "Completed OpenRouter job has no video URL:",
-        openRouterData
+        "Generated video could not be downloaded:",
+        downloadError
       );
+
+      /*
+       * The provider says the video is completed,
+       * but VidForge could not actually deliver it.
+       *
+       * Refund the user.
+       */
+
+      await markVideoFailed(
+        user.id,
+        userJob.id,
+        jobId
+      );
+
+      const cost =
+        Number(userJob.cost ?? 0);
+
+      const refundedCredits =
+        await refundCredits(
+          user.id,
+          cost
+        );
 
       return json(
         {
+          success: false,
+
+          status:
+            "failed",
+
+          jobId,
+
           error:
-            "Veo completed the generation, but OpenRouter did not return a video URL.",
+            "The video was generated, but VidForge could not retrieve the finished MP4. Your credits have been refunded.",
+
+          remainingCredits:
+            refundedCredits,
         },
         502
       );
     }
 
     /*
-     * Protected VidForge video URL.
+     * Save MP4 into the SAME Supabase bucket:
+     *
+     * input-images/
+     *   generated-videos/
+     *     user-id/
+     *       job-id.mp4
      */
 
-    const appVideoUrl =
-      `/api/generate-script-video?jobId=${encodeURIComponent(
-        jobId
-      )}&download=true`;
+    let savedVideoUrl: string;
 
-    /*
-     * Save completed video URL.
-     *
-     * IMPORTANT:
-     * image_url remains untouched.
-     *
-     * Therefore History continues to have both:
-     *
-     * image_url
-     * video_url
-     */
-
-    await updateVideoRecord(
-      user.id,
-      jobId,
-      appVideoUrl
-    );
-
-    /*
-     * Normal status poll.
-     */
-
-    if (!download) {
-      const currentCredits =
-        await getUserCredits(
-          user.id
+    try {
+      savedVideoUrl =
+        await saveGeneratedVideo(
+          user.id,
+          jobId,
+          downloadedVideo.buffer,
+          downloadedVideo.contentType
         );
+    } catch (storageError: any) {
+      console.error(
+        "Generated video could not be saved to Supabase:",
+        storageError
+      );
+
+      await markVideoFailed(
+        user.id,
+        userJob.id,
+        jobId
+      );
+
+      const cost =
+        Number(userJob.cost ?? 0);
+
+      const refundedCredits =
+        await refundCredits(
+          user.id,
+          cost
+        );
+
+      return json(
+        {
+          success: false,
+
+          status:
+            "failed",
+
+          jobId,
+
+          error:
+            "The video was generated, but VidForge could not save it. Your credits have been refunded.",
+
+          remainingCredits:
+            refundedCredits,
+        },
+        500
+      );
+    }
+
+    /*
+     * Save permanent Supabase URL in user_videos.
+     */
+
+    try {
+      await markVideoCompleted(
+        user.id,
+        userJob.id,
+        savedVideoUrl
+      );
+    } catch (databaseError: any) {
+      /*
+       * The actual MP4 already exists in our storage.
+       *
+       * Do NOT refund here because the user has a valid
+       * generated video.
+       */
+
+      console.error(
+        "Video was saved but database update failed:",
+        databaseError
+      );
+
+      /*
+       * Still return the working video URL to the frontend
+       * so the current generation screen can play it.
+       */
 
       return json({
         success: true,
 
-        status: "completed",
+        status:
+          "completed",
 
         jobId,
 
         videoUrl:
-          appVideoUrl,
+          savedVideoUrl,
+
+        remainingCredits:
+          await getUserCredits(
+            user.id
+          ),
+
+        warning:
+          "Video was generated successfully, but the history record could not be updated yet.",
+      });
+    }
+
+    /*
+     * ------------------------------------------------------
+     * SUCCESS
+     * ------------------------------------------------------
+     */
+
+    const currentCredits =
+      await getUserCredits(
+        user.id
+      );
+
+    /*
+     * Normal frontend polling response.
+     */
+
+    if (!download) {
+      return json({
+        success: true,
+
+        status:
+          "completed",
+
+        jobId,
+
+        videoUrl:
+          savedVideoUrl,
 
         remainingCredits:
           currentCredits,
@@ -1360,81 +2078,15 @@ export async function GET(
     }
 
     /*
-     * ------------------------------------------------------
-     * DOWNLOAD / STREAM MODE
-     * ------------------------------------------------------
+     * If someone explicitly calls:
+     *
+     * ?jobId=...&download=true
+     *
+     * redirect to the permanent Supabase MP4.
      */
 
-    const providerResponse =
-      await fetch(
-        providerVideoUrl,
-        {
-          method: "GET",
-
-          headers: {
-            Authorization:
-              `Bearer ${OPENROUTER_API_KEY}`,
-          },
-
-          cache: "no-store",
-        }
-      );
-
-    if (!providerResponse.ok) {
-      const providerText =
-        await providerResponse
-          .text()
-          .catch(() => "");
-
-      console.error(
-        "Unable to download generated video from OpenRouter:",
-        providerResponse.status,
-        providerText
-      );
-
-      return json(
-        {
-          error:
-            "The video was generated, but VidForge could not retrieve the finished MP4 yet.",
-        },
-        502
-      );
-    }
-
-    const contentType =
-      providerResponse.headers.get(
-        "content-type"
-      ) ||
-      "video/mp4";
-
-    const contentLength =
-      providerResponse.headers.get(
-        "content-length"
-      );
-
-    return new Response(
-      providerResponse.body,
-      {
-        status: 200,
-
-        headers: {
-          "Content-Type":
-            contentType,
-
-          ...(contentLength
-            ? {
-                "Content-Length":
-                  contentLength,
-              }
-            : {}),
-
-          "Cache-Control":
-            "private, no-store, max-age=0",
-
-          "Content-Disposition":
-            'inline; filename="vidforge-ai-video.mp4"',
-        },
-      }
+    return NextResponse.redirect(
+      savedVideoUrl
     );
   } catch (error: any) {
     console.error(

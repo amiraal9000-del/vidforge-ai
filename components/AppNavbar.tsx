@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 import { useRouter } from 'next/navigation';
 import { Menu, X, Music, FileText, User, LogOut } from 'lucide-react';
@@ -12,13 +12,37 @@ const supabase = createBrowserClient(
 
 export default function AppNavbar({ user }: { user: any }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isReady, setIsReady] = useState(false);
   const router = useRouter();
+
+  // ✅ Safe: wait for browser before accessing user data
+  useEffect(() => {
+    setIsReady(true);
+  }, []);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push('/');
     router.refresh();
   };
+
+  // ✅ Build-safe: show nothing/loading until browser ready
+  if (!isReady) {
+    return (
+      <nav className="border-b border-zinc-800 px-4 py-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <Link href="/dashboard" className="text-2xl font-bold bg-gradient-to-r from-violet-400 to-fuchsia-500 bg-clip-text text-transparent">
+            VidForge AI
+          </Link>
+          <span className="text-zinc-500 text-sm">...</span>
+        </div>
+      </nav>
+    );
+  }
+
+  // ✅ Safe: get username ONLY if user exists
+  const username = user?.email?.split('@')[0] || 'User';
+  const userEmail = user?.email || '';
 
   return (
     <nav className="border-b border-zinc-800 px-4 py-4">
@@ -36,7 +60,7 @@ export default function AppNavbar({ user }: { user: any }) {
           <Link href="/history" className="text-zinc-300 hover:text-white">My Videos</Link>
           <div className="flex items-center gap-2 text-zinc-300">
             <User size={16} />
-            <span className="text-sm">{user.email?.split('@')[0]}</span>
+            <span className="text-sm">{username}</span>
           </div>
           <button
             onClick={handleLogout}
@@ -88,7 +112,7 @@ export default function AppNavbar({ user }: { user: any }) {
               My Videos
             </Link>
             <div className="px-5 py-3 border-b border-zinc-800 text-sm text-zinc-500">
-              {user.email}
+              {userEmail}
             </div>
             <button
               onClick={() => { handleLogout(); setMenuOpen(false); }}

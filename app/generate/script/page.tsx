@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createBrowserClient } from "@supabase/ssr";
 import { toast } from "sonner";
 import AppNavbar from "@/components/AppNavbar";
@@ -30,7 +35,9 @@ const PRICING: Record<Duration, Pricing> = {
 const DURATIONS: Duration[] = [4, 6, 8];
 
 function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) =>
+    setTimeout(resolve, ms)
+  );
 }
 
 export default function GenerateScriptVideoPage() {
@@ -43,32 +50,87 @@ export default function GenerateScriptVideoPage() {
     []
   );
 
-  const [user, setUser] = useState<any>(null);
-  const [credits, setCredits] = useState<number | null>(null);
-
-  const [prompt, setPrompt] = useState("");
-
-  const [image, setImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-
-  const [duration, setDuration] = useState<Duration>(8);
-  const [withAudio, setWithAudio] = useState(true);
-
-  const [showReview, setShowReview] = useState(false);
-
-  const [generating, setGenerating] = useState(false);
-  const [generationStatus, setGenerationStatus] = useState("");
-
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const videoObjectUrlRef = useRef<string | null>(null);
-
   /*
   |--------------------------------------------------------------------------
   | USER
+  |--------------------------------------------------------------------------
+  */
+
+  const [user, setUser] = useState<any>(null);
+  const [credits, setCredits] =
+    useState<number | null>(null);
+
+  /*
+  |--------------------------------------------------------------------------
+  | GENERATOR INPUT
+  |--------------------------------------------------------------------------
+  */
+
+  const [prompt, setPrompt] = useState("");
+
+  const [image, setImage] =
+    useState<File | null>(null);
+
+  const [imagePreview, setImagePreview] =
+    useState<string | null>(null);
+
+  const [duration, setDuration] =
+    useState<Duration>(8);
+
+  const [withAudio, setWithAudio] =
+    useState(true);
+
+  /*
+  |--------------------------------------------------------------------------
+  | UI STATE
+  |--------------------------------------------------------------------------
+  */
+
+  const [showReview, setShowReview] =
+    useState(false);
+
+  const [generating, setGenerating] =
+    useState(false);
+
+  const [generationStatus, setGenerationStatus] =
+    useState("");
+
+  const [jobId, setJobId] =
+    useState<string | null>(null);
+
+  /*
+  |--------------------------------------------------------------------------
+  | FINAL VIDEO
+  |--------------------------------------------------------------------------
+  */
+
+  const [videoUrl, setVideoUrl] =
+    useState<string | null>(null);
+
+  const [videoReady, setVideoReady] =
+    useState(false);
+
+  const [videoError, setVideoError] =
+    useState(false);
+
+  /*
+  |--------------------------------------------------------------------------
+  | REFS
+  |--------------------------------------------------------------------------
+  */
+
+  const fileInputRef =
+    useRef<HTMLInputElement | null>(null);
+
+  const videoObjectUrlRef =
+    useRef<string | null>(null);
+
+  const videoRef =
+    useRef<HTMLVideoElement | null>(null);
+
+  /*
+  |--------------------------------------------------------------------------
+  | LOAD USER
   |--------------------------------------------------------------------------
   */
 
@@ -80,22 +142,33 @@ export default function GenerateScriptVideoPage() {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setUser(user);
 
-      if (!user) return;
+      if (!user) {
+        return;
+      }
 
-      const { data: profile, error } = await supabase
+      const {
+        data: profile,
+        error,
+      } = await supabase
         .from("profiles")
         .select("credits")
         .eq("id", user.id)
         .single();
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       if (!error && profile) {
-        setCredits(Number(profile.credits ?? 0));
+        setCredits(
+          Number(profile.credits ?? 0)
+        );
       }
     };
 
@@ -108,17 +181,27 @@ export default function GenerateScriptVideoPage() {
 
   /*
   |--------------------------------------------------------------------------
-  | CLEANUP VIDEO OBJECT URL
+  | CLEANUP
   |--------------------------------------------------------------------------
   */
 
   useEffect(() => {
     return () => {
       if (videoObjectUrlRef.current) {
-        URL.revokeObjectURL(videoObjectUrlRef.current);
+        URL.revokeObjectURL(
+          videoObjectUrlRef.current
+        );
+
+        videoObjectUrlRef.current = null;
+      }
+
+      if (imagePreview) {
+        URL.revokeObjectURL(
+          imagePreview
+        );
       }
     };
-  }, []);
+  }, [imagePreview]);
 
   /*
   |--------------------------------------------------------------------------
@@ -126,25 +209,41 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const handleImageChange = (file: File | null) => {
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please select a valid image.");
+  const handleImageChange = (
+    file: File | null
+  ) => {
+    if (!file) {
       return;
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error("Image must be smaller than 10MB.");
+    if (!file.type.startsWith("image/")) {
+      toast.error(
+        "Please select a valid image."
+      );
+      return;
+    }
+
+    if (
+      file.size >
+      10 * 1024 * 1024
+    ) {
+      toast.error(
+        "Image must be smaller than 10MB."
+      );
       return;
     }
 
     if (imagePreview) {
-      URL.revokeObjectURL(imagePreview);
+      URL.revokeObjectURL(
+        imagePreview
+      );
     }
 
     setImage(file);
-    setImagePreview(URL.createObjectURL(file));
+
+    setImagePreview(
+      URL.createObjectURL(file)
+    );
   };
 
   /*
@@ -153,9 +252,10 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const currentCost = withAudio
-    ? PRICING[duration].audio
-    : PRICING[duration].silent;
+  const currentCost =
+    withAudio
+      ? PRICING[duration].audio
+      : PRICING[duration].silent;
 
   /*
   |--------------------------------------------------------------------------
@@ -163,13 +263,20 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const wordCount = prompt.trim()
-    ? prompt.trim().split(/\s+/).filter(Boolean).length
-    : 0;
+  const wordCount =
+    prompt.trim()
+      ? prompt
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)
+          .length
+      : 0;
 
   const estimatedSeconds =
     wordCount > 0
-      ? Math.ceil((wordCount / 150) * 60)
+      ? Math.ceil(
+          (wordCount / 150) * 60
+        )
       : 0;
 
   const scriptTooLong =
@@ -177,7 +284,7 @@ export default function GenerateScriptVideoPage() {
 
   /*
   |--------------------------------------------------------------------------
-  | TOKEN
+  | ACCESS TOKEN
   |--------------------------------------------------------------------------
   */
 
@@ -186,7 +293,9 @@ export default function GenerateScriptVideoPage() {
       data: { session },
     } = await supabase.auth.getSession();
 
-    return session?.access_token ?? null;
+    return (
+      session?.access_token ?? null
+    );
   };
 
   /*
@@ -197,17 +306,23 @@ export default function GenerateScriptVideoPage() {
 
   const handleReview = () => {
     if (!user) {
-      toast.error("Please sign in first.");
+      toast.error(
+        "Please sign in first."
+      );
       return;
     }
 
     if (!image) {
-      toast.error("Please upload a photo.");
+      toast.error(
+        "Please upload a photo."
+      );
       return;
     }
 
     if (!prompt.trim()) {
-      toast.error("Please enter your script.");
+      toast.error(
+        "Please enter your script."
+      );
       return;
     }
 
@@ -239,40 +354,77 @@ export default function GenerateScriptVideoPage() {
 
   const startGeneration = async () => {
     if (!user) {
-      toast.error("Please sign in before generating.");
+      toast.error(
+        "Please sign in before generating."
+      );
       return;
     }
 
     if (!image) {
-      toast.error("Please upload a photo.");
+      toast.error(
+        "Please upload a photo."
+      );
       return;
     }
 
     if (!prompt.trim()) {
-      toast.error("Please enter your script.");
+      toast.error(
+        "Please enter your script."
+      );
       return;
     }
 
-    const token = await getAccessToken();
+    if (scriptTooLong) {
+      toast.error(
+        `Your script is too long for a ${duration}-second video.`
+      );
+      return;
+    }
+
+    const token =
+      await getAccessToken();
 
     if (!token) {
-      toast.error("Your session has expired.");
+      toast.error(
+        "Your session has expired."
+      );
       return;
     }
 
     try {
-      setGenerating(true);
-      setShowReview(false);
-      setVideoUrl(null);
-      setJobId(null);
-      setGenerationStatus("Preparing your video...");
+      /*
+       * Reset only the previous preview.
+       */
 
-      if (videoObjectUrlRef.current) {
-        URL.revokeObjectURL(videoObjectUrlRef.current);
-        videoObjectUrlRef.current = null;
+      if (
+        videoObjectUrlRef.current
+      ) {
+        URL.revokeObjectURL(
+          videoObjectUrlRef.current
+        );
+
+        videoObjectUrlRef.current =
+          null;
       }
 
-      const formData = new FormData();
+      setVideoUrl(null);
+      setVideoReady(false);
+      setVideoError(false);
+
+      setGenerating(true);
+      setShowReview(false);
+      setJobId(null);
+
+      setGenerationStatus(
+        "Preparing your video..."
+      );
+
+      /*
+       * Build multipart request.
+       */
+
+      const formData =
+        new FormData();
 
       formData.append(
         "prompt",
@@ -294,26 +446,26 @@ export default function GenerateScriptVideoPage() {
         String(withAudio)
       );
 
-      /*
-       * Do NOT send cost.
-       *
-       * Backend calculates it.
-       */
-
       setGenerationStatus(
         "Sending your idea to Veo..."
       );
 
-      const response = await fetch(
-        "/api/generate-script-video",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          body: formData,
-        }
-      );
+      const response =
+        await fetch(
+          "/api/generate-script-video",
+          {
+            method: "POST",
+
+            headers: {
+              Authorization:
+                `Bearer ${token}`,
+            },
+
+            body: formData,
+
+            cache: "no-store",
+          }
+        );
 
       const data =
         await response
@@ -333,6 +485,10 @@ export default function GenerateScriptVideoPage() {
         );
       }
 
+      /*
+       * Provider job successfully started.
+       */
+
       setJobId(data.jobId);
 
       if (
@@ -347,6 +503,10 @@ export default function GenerateScriptVideoPage() {
       setGenerationStatus(
         "Veo is creating your video..."
       );
+
+      /*
+       * Wait for the actual completed video.
+       */
 
       await pollForVideo(
         data.jobId
@@ -369,13 +529,17 @@ export default function GenerateScriptVideoPage() {
 
   /*
   |--------------------------------------------------------------------------
-  | POLL JOB
+  | POLL VIDEO
   |--------------------------------------------------------------------------
   */
 
   const pollForVideo = async (
     currentJobId: string
   ) => {
+    /*
+     * 72 attempts × 5 seconds = 6 minutes.
+     */
+
     const maxAttempts = 72;
 
     for (
@@ -399,10 +563,12 @@ export default function GenerateScriptVideoPage() {
           )}`,
           {
             method: "GET",
+
             headers: {
               Authorization:
                 `Bearer ${token}`,
             },
+
             cache: "no-store",
           }
         );
@@ -419,6 +585,11 @@ export default function GenerateScriptVideoPage() {
         );
       }
 
+      /*
+       * Keep the displayed credit balance
+       * synchronized with the server.
+       */
+
       if (
         typeof data?.remainingCredits ===
         "number"
@@ -428,23 +599,56 @@ export default function GenerateScriptVideoPage() {
         );
       }
 
+      /*
+       * FAILED
+       */
+
+      if (
+        data?.status === "failed" ||
+        data?.status === "cancelled" ||
+        data?.status === "expired"
+      ) {
+        throw new Error(
+          data?.error ||
+            `Video generation ${data.status}.`
+        );
+      }
+
+      /*
+       * COMPLETED
+       */
+
       if (
         data?.status ===
         "completed"
       ) {
         if (!data.videoUrl) {
           throw new Error(
-            "Video completed but no video URL was returned."
+            "Veo completed the video, but no video URL was returned."
           );
         }
 
         setGenerationStatus(
-          "Video created. Preparing your preview..."
+          "Your video has been created!"
         );
+
+        /*
+         * Retrieve the actual MP4.
+         */
 
         await downloadVideo(
           data.videoUrl
         );
+
+        /*
+         * IMPORTANT:
+         *
+         * Do NOT reset the generator.
+         * Do NOT clear the form.
+         * Do NOT send the user back.
+         *
+         * The finished video remains on screen.
+         */
 
         setGenerationStatus(
           "Your video is ready."
@@ -459,16 +663,9 @@ export default function GenerateScriptVideoPage() {
         return;
       }
 
-      if (
-        data?.status === "failed" ||
-        data?.status === "cancelled" ||
-        data?.status === "expired"
-      ) {
-        throw new Error(
-          data?.error ||
-            `Video generation ${data.status}.`
-        );
-      }
+      /*
+       * PROCESSING STATUS
+       */
 
       if (
         data?.status ===
@@ -500,7 +697,7 @@ export default function GenerateScriptVideoPage() {
 
   /*
   |--------------------------------------------------------------------------
-  | DOWNLOAD VIDEO
+  | DOWNLOAD FINISHED VIDEO
   |--------------------------------------------------------------------------
   */
 
@@ -517,7 +714,7 @@ export default function GenerateScriptVideoPage() {
     }
 
     setGenerationStatus(
-      "Downloading your finished video..."
+      "Preparing your finished video..."
     );
 
     const response =
@@ -525,25 +722,59 @@ export default function GenerateScriptVideoPage() {
         protectedVideoUrl,
         {
           method: "GET",
+
           headers: {
             Authorization:
               `Bearer ${token}`,
           },
+
           cache: "no-store",
         }
       );
 
     if (!response.ok) {
-      const data =
-        await response
-          .json()
-          .catch(() => null);
+      let errorMessage =
+        "Unable to retrieve the generated video.";
+
+      const contentType =
+        response.headers.get(
+          "content-type"
+        ) || "";
+
+      if (
+        contentType.includes(
+          "application/json"
+        )
+      ) {
+        const data =
+          await response
+            .json()
+            .catch(() => null);
+
+        if (data?.error) {
+          errorMessage =
+            data.error;
+        }
+      } else {
+        const text =
+          await response
+            .text()
+            .catch(() => "");
+
+        if (text) {
+          errorMessage = text;
+        }
+      }
 
       throw new Error(
-        data?.error ||
-          "Unable to download the generated video."
+        errorMessage
       );
     }
+
+    /*
+     * Convert MP4 response into a browser
+     * object URL.
+     */
 
     const blob =
       await response.blob();
@@ -554,13 +785,42 @@ export default function GenerateScriptVideoPage() {
       );
     }
 
+    /*
+     * Confirm that we actually received
+     * something that looks like video.
+     */
+
+    if (
+      !blob.type.startsWith(
+        "video/"
+      ) &&
+      blob.type !==
+        "application/octet-stream"
+    ) {
+      console.warn(
+        "Unexpected generated video content type:",
+        blob.type
+      );
+    }
+
+    /*
+     * Remove previous object URL.
+     */
+
     if (
       videoObjectUrlRef.current
     ) {
       URL.revokeObjectURL(
         videoObjectUrlRef.current
       );
+
+      videoObjectUrlRef.current =
+        null;
     }
+
+    /*
+     * Create local browser URL.
+     */
 
     const objectUrl =
       URL.createObjectURL(blob);
@@ -568,12 +828,79 @@ export default function GenerateScriptVideoPage() {
     videoObjectUrlRef.current =
       objectUrl;
 
+    setVideoError(false);
+    setVideoReady(false);
     setVideoUrl(objectUrl);
+
+    /*
+     * Give React time to mount the
+     * <video> element.
+     */
+
+    await new Promise<void>(
+      (resolve) => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      }
+    );
+
+    /*
+     * Try to load/play immediately.
+     */
+
+    if (videoRef.current) {
+      try {
+        videoRef.current.load();
+
+        await videoRef.current
+          .play()
+          .catch(() => {
+            /*
+             * Browser may block autoplay.
+             *
+             * This is NOT a generation failure.
+             * The video remains visible with
+             * the normal play button.
+             */
+          });
+      } catch {
+        /*
+         * Ignore autoplay restrictions.
+         */
+      }
+    }
   };
 
   /*
   |--------------------------------------------------------------------------
-  | NEW VIDEO
+  | VIDEO READY
+  |--------------------------------------------------------------------------
+  */
+
+  const handleVideoReady = () => {
+    setVideoReady(true);
+    setVideoError(false);
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | VIDEO ERROR
+  |--------------------------------------------------------------------------
+  */
+
+  const handleVideoError = () => {
+    setVideoError(true);
+    setVideoReady(false);
+
+    console.error(
+      "The browser could not play the generated video."
+    );
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | CREATE ANOTHER VIDEO
   |--------------------------------------------------------------------------
   */
 
@@ -596,6 +923,9 @@ export default function GenerateScriptVideoPage() {
     }
 
     setVideoUrl(null);
+    setVideoReady(false);
+    setVideoError(false);
+
     setJobId(null);
     setGenerationStatus("");
     setGenerating(false);
@@ -604,6 +934,15 @@ export default function GenerateScriptVideoPage() {
     setPrompt("");
     setImage(null);
     setImagePreview(null);
+
+    /*
+     * Allow selecting the same file again.
+     */
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value =
+        "";
+    }
   };
 
   /*
@@ -616,27 +955,33 @@ export default function GenerateScriptVideoPage() {
     <div className="flex min-h-screen flex-col bg-[#050505] text-white">
 
       {/* =====================================================
-          APP NAVBAR
+          NAVBAR
           ===================================================== */}
 
       <AppNavbar user={user} />
 
       {/* =====================================================
-          MAIN APP CONTENT
+          MAIN
           ===================================================== */}
 
       <main className="flex-1">
+
         <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
 
-          {/* HEADER */}
+          {/* =================================================
+              HEADER
+              ================================================= */}
 
           <div className="mb-8">
+
             <div className="mb-2 flex items-center gap-2">
+
               <div className="h-2 w-2 rounded-full bg-purple-500" />
 
               <span className="text-sm font-medium text-purple-300">
-                
+                VidForge AI
               </span>
+
             </div>
 
             <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
@@ -648,53 +993,120 @@ export default function GenerateScriptVideoPage() {
               AI-generated video with realistic
               movement, expressions and speech.
             </p>
+
           </div>
 
           {/* =================================================
-              GENERATED VIDEO
+              COMPLETED VIDEO
               ================================================= */}
 
           {videoUrl && (
-            <div className="mb-8 overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] shadow-2xl">
 
-              <div className="p-5 sm:p-6">
+            <div className="mb-8 overflow-hidden rounded-3xl border border-green-500/20 bg-white/[0.04] shadow-2xl">
 
-                <div className="mb-5 flex items-center justify-between">
+              <div className="p-5 sm:p-7">
 
-                  <div>
-                    <p className="text-sm font-semibold text-green-400">
-                      Video ready
-                    </p>
+                {/* SUCCESS HEADER */}
 
-                    <p className="mt-1 text-xs text-white/50">
-                      Your AI-generated video has been
-                      created successfully.
-                    </p>
+                <div className="mb-6 text-center">
+
+                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-green-500/10">
+
+                    <span className="text-2xl text-green-400">
+                      ✓
+                    </span>
+
                   </div>
 
-                </div>
+                  <h2 className="text-2xl font-bold sm:text-3xl">
+                    Your video has been created!
+                  </h2>
 
-                <div className="mx-auto max-w-sm overflow-hidden rounded-2xl bg-black shadow-2xl">
-
-                  <video
-                    src={videoUrl}
-                    controls
-                    autoPlay
-                    loop
-                    playsInline
-                    className="block h-auto w-full"
-                  />
+                  <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-white/50">
+                    Your AI-generated video is ready.
+                    You can watch it below or create
+                    another video.
+                  </p>
 
                 </div>
 
-                <div className="mt-6 flex justify-center">
+                {/* VIDEO */}
+
+                <div className="mx-auto w-full max-w-md">
+
+                  <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
+
+                    <video
+                      ref={videoRef}
+                      src={videoUrl}
+                      controls
+                      autoPlay
+                      playsInline
+                      loop
+                      preload="auto"
+                      onLoadedData={
+                        handleVideoReady
+                      }
+                      onCanPlay={
+                        handleVideoReady
+                      }
+                      onError={
+                        handleVideoError
+                      }
+                      className="block h-auto w-full bg-black"
+                    />
+
+                    {!videoReady &&
+                      !videoError && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+
+                          <div className="text-center">
+
+                            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-purple-400" />
+
+                            <p className="text-xs text-white/60">
+                              Preparing video...
+                            </p>
+
+                          </div>
+
+                        </div>
+                      )}
+
+                  </div>
+
+                  {/* PLAYBACK ERROR */}
+
+                  {videoError && (
+
+                    <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-center">
+
+                      <p className="text-sm font-semibold text-red-300">
+                        The video was created, but
+                        your browser could not play it.
+                      </p>
+
+                      <p className="mt-2 text-xs leading-5 text-red-300/60">
+                        Please try opening the video
+                        again or refresh the page.
+                      </p>
+
+                    </div>
+
+                  )}
+
+                </div>
+
+                {/* ACTIONS */}
+
+                <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
 
                   <button
                     type="button"
                     onClick={
                       startNewVideo
                     }
-                    className="rounded-xl bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-white/90"
+                    className="rounded-2xl bg-white px-6 py-3.5 text-sm font-bold text-black transition hover:bg-white/90"
                   >
                     Create another video
                   </button>
@@ -704,6 +1116,7 @@ export default function GenerateScriptVideoPage() {
               </div>
 
             </div>
+
           )}
 
           {/* =================================================
@@ -711,6 +1124,7 @@ export default function GenerateScriptVideoPage() {
               ================================================= */}
 
           {!videoUrl && (
+
             <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
 
               {/* =============================================
@@ -745,11 +1159,15 @@ export default function GenerateScriptVideoPage() {
                   </div>
 
                   <input
-                    ref={fileInputRef}
+                    ref={
+                      fileInputRef
+                    }
                     type="file"
                     accept="image/png,image/jpeg,image/webp"
                     className="hidden"
-                    onChange={(event) => {
+                    onChange={(
+                      event
+                    ) => {
                       const file =
                         event.target.files?.[0] ||
                         null;
@@ -765,14 +1183,18 @@ export default function GenerateScriptVideoPage() {
                     <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black">
 
                       <img
-                        src={imagePreview}
+                        src={
+                          imagePreview
+                        }
                         alt="Selected reference"
                         className="mx-auto max-h-[430px] w-full object-contain"
                       />
 
                       <button
                         type="button"
-                        disabled={generating}
+                        disabled={
+                          generating
+                        }
                         onClick={() =>
                           fileInputRef.current?.click()
                         }
@@ -787,7 +1209,9 @@ export default function GenerateScriptVideoPage() {
 
                     <button
                       type="button"
-                      disabled={generating}
+                      disabled={
+                        generating
+                      }
                       onClick={() =>
                         fileInputRef.current?.click()
                       }
@@ -840,18 +1264,20 @@ export default function GenerateScriptVideoPage() {
 
                   <textarea
                     value={prompt}
-                    onChange={(event) =>
+                    onChange={(
+                      event
+                    ) =>
                       setPrompt(
                         event.target.value
                       )
                     }
-                    disabled={generating}
+                    disabled={
+                      generating
+                    }
                     rows={8}
                     placeholder={`Example:
 
-Look directly into the camera with confidence and say:
-
-“Wait… you’re telling me this video was made from just ONE photo?”`}
+Wait… you’re telling me this video was made from just ONE photo?`}
                     className="w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-6 text-white outline-none placeholder:text-white/25 focus:border-purple-400/50 disabled:opacity-50"
                   />
 
@@ -862,6 +1288,7 @@ Look directly into the camera with confidence and say:
                     </span>
 
                     {prompt.trim() && (
+
                       <span
                         className={
                           scriptTooLong
@@ -873,17 +1300,20 @@ Look directly into the camera with confidence and say:
                         {" "}
                         ~{estimatedSeconds}s
                       </span>
+
                     )}
 
                   </div>
 
                   {scriptTooLong && (
+
                     <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-xs leading-5 text-red-300">
                       This script is too long for a{" "}
                       {duration}-second video.
                       Shorten it or choose a longer
                       duration.
                     </div>
+
                   )}
 
                 </section>
@@ -924,23 +1354,30 @@ Look directly into the camera with confidence and say:
 
                       {DURATIONS.map(
                         (value) => (
+
                           <button
-                            key={value}
+                            key={
+                              value
+                            }
                             type="button"
-                            disabled={generating}
+                            disabled={
+                              generating
+                            }
                             onClick={() =>
                               setDuration(
                                 value
                               )
                             }
                             className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${
-                              duration === value
+                              duration ===
+                              value
                                 ? "border-purple-400 bg-purple-500/15 text-white"
                                 : "border-white/10 bg-black/20 text-white/60 hover:border-white/20 hover:text-white"
                             } disabled:opacity-50`}
                           >
                             {value}s
                           </button>
+
                         )
                       )}
 
@@ -969,10 +1406,14 @@ Look directly into the camera with confidence and say:
 
                       <button
                         type="button"
-                        disabled={generating}
+                        disabled={
+                          generating
+                        }
                         onClick={() =>
                           setWithAudio(
-                            (current) =>
+                            (
+                              current
+                            ) =>
                               !current
                           )
                         }
@@ -1017,6 +1458,7 @@ Look directly into the camera with confidence and say:
                     </div>
 
                     {credits !== null && (
+
                       <div className="mt-2 flex items-center justify-between text-xs">
 
                         <span className="text-white/40">
@@ -1025,7 +1467,8 @@ Look directly into the camera with confidence and say:
 
                         <span
                           className={
-                            credits >= currentCost
+                            credits >=
+                            currentCost
                               ? "text-green-400"
                               : "text-red-400"
                           }
@@ -1034,6 +1477,7 @@ Look directly into the camera with confidence and say:
                         </span>
 
                       </div>
+
                     )}
 
                   </div>
@@ -1060,9 +1504,11 @@ Look directly into the camera with confidence and say:
                       </p>
 
                       {jobId && (
+
                         <p className="mt-4 break-all text-[10px] text-white/20">
                           Job: {jobId}
                         </p>
+
                       )}
 
                     </div>
@@ -1070,6 +1516,7 @@ Look directly into the camera with confidence and say:
                   ) : (
 
                     <>
+
                       <button
                         type="button"
                         onClick={
@@ -1092,6 +1539,7 @@ Look directly into the camera with confidence and say:
                         Your image and script will be
                         securely processed by VidForge AI.
                       </p>
+
                     </>
 
                   )}
@@ -1101,9 +1549,11 @@ Look directly into the camera with confidence and say:
               </div>
 
             </div>
+
           )}
 
         </div>
+
       </main>
 
       {/* =====================================================
@@ -1136,15 +1586,19 @@ Look directly into the camera with confidence and say:
                 {/* IMAGE */}
 
                 {imagePreview && (
+
                   <div className="overflow-hidden rounded-2xl bg-black">
 
                     <img
-                      src={imagePreview}
+                      src={
+                        imagePreview
+                      }
                       alt="Video reference"
                       className="max-h-[280px] w-full object-contain"
                     />
 
                   </div>
+
                 )}
 
                 {/* SCRIPT */}
@@ -1216,7 +1670,9 @@ Look directly into the camera with confidence and say:
                   <button
                     type="button"
                     onClick={() =>
-                      setShowReview(false)
+                      setShowReview(
+                        false
+                      )
                     }
                     className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-4 text-sm font-semibold transition hover:bg-white/[0.08]"
                   >

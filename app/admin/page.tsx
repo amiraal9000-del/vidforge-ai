@@ -13,6 +13,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
+const ADMIN_EMAIL = 'Calibossmfr01@gmail.com';
+
 type DashboardStats = {
   totalUsers: number;
   totalVideos: number;
@@ -55,17 +57,39 @@ export default function AdminPage() {
         return;
       }
 
-      // Users
+      // Only the designated administrator can access this page.
+      if (
+        session.user.email?.toLowerCase() !==
+        ADMIN_EMAIL.toLowerCase()
+      ) {
+        await supabase.auth.signOut();
+        router.replace('/admin/login?error=unauthorized');
+        return;
+      }
+
+      // -----------------------------
+      // TOTAL USERS
+      // -----------------------------
       const { count: totalUsers } = await supabase
         .from('profiles')
-        .select('*', { count: 'exact', head: true });
+        .select('*', {
+          count: 'exact',
+          head: true,
+        });
 
-      // Videos
+      // -----------------------------
+      // TOTAL VIDEOS
+      // -----------------------------
       const { count: totalVideos } = await supabase
         .from('user_videos')
-        .select('*', { count: 'exact', head: true });
+        .select('*', {
+          count: 'exact',
+          head: true,
+        });
 
-      // Credits currently held by users
+      // -----------------------------
+      // CREDITS CURRENTLY HELD
+      // -----------------------------
       const { data: profileCredits } = await supabase
         .from('profiles')
         .select('credits');
@@ -76,7 +100,9 @@ export default function AdminPage() {
           0
         ) || 0;
 
-      // Successful deposits
+      // -----------------------------
+      // SUCCESSFUL DEPOSITS
+      // -----------------------------
       const { data: successfulDeposits } = await supabase
         .from('wallet_deposits')
         .select('amount')
@@ -84,24 +110,33 @@ export default function AdminPage() {
 
       const totalRevenue =
         successfulDeposits?.reduce(
-          (sum, deposit) => sum + Number(deposit.amount || 0),
+          (sum, deposit) =>
+            sum + Number(deposit.amount || 0),
           0
         ) || 0;
 
-      // Pending deposits
+      // -----------------------------
+      // PENDING DEPOSITS
+      // -----------------------------
       const { count: pendingDeposits } = await supabase
         .from('wallet_deposits')
-        .select('*', { count: 'exact', head: true })
+        .select('*', {
+          count: 'exact',
+          head: true,
+        })
         .eq('status', 'pending');
 
-      // Credits spent through video generation
+      // -----------------------------
+      // TOTAL CREDITS SPENT
+      // -----------------------------
       const { data: videos } = await supabase
         .from('user_videos')
         .select('cost');
 
       const totalCreditsSpent =
         videos?.reduce(
-          (sum, video) => sum + (video.cost || 0),
+          (sum, video) =>
+            sum + (video.cost || 0),
           0
         ) || 0;
 
@@ -109,13 +144,17 @@ export default function AdminPage() {
         totalUsers: totalUsers || 0,
         totalVideos: totalVideos || 0,
         totalCredits,
-        successfulDeposits: successfulDeposits?.length || 0,
+        successfulDeposits:
+          successfulDeposits?.length || 0,
         pendingDeposits: pendingDeposits || 0,
         totalRevenue,
         totalCreditsSpent,
       });
     } catch (error) {
-      console.error('Admin dashboard error:', error);
+      console.error(
+        'Admin dashboard error:',
+        error
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -141,7 +180,9 @@ export default function AdminPage() {
       <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center">
         <div className="text-center">
           <div className="w-10 h-10 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-zinc-400">Loading admin dashboard...</p>
+          <p className="text-zinc-400">
+            Loading admin dashboard...
+          </p>
         </div>
       </div>
     );
@@ -149,12 +190,17 @@ export default function AdminPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
-      {/* Header */}
+
+      {/* HEADER */}
       <header className="border-b border-zinc-800 bg-zinc-950/95">
         <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
+
           <div>
             <h1 className="text-2xl font-bold">
-              VidForge <span className="text-purple-400">Admin</span>
+              VidForge{' '}
+              <span className="text-purple-400">
+                Admin
+              </span>
             </h1>
 
             <p className="text-sm text-zinc-500 mt-1">
@@ -163,6 +209,7 @@ export default function AdminPage() {
           </div>
 
           <div className="flex items-center gap-3">
+
             <button
               onClick={handleRefresh}
               disabled={refreshing}
@@ -170,7 +217,11 @@ export default function AdminPage() {
             >
               <RefreshCw
                 size={16}
-                className={refreshing ? 'animate-spin' : ''}
+                className={
+                  refreshing
+                    ? 'animate-spin'
+                    : ''
+                }
               />
               Refresh
             </button>
@@ -182,21 +233,28 @@ export default function AdminPage() {
               <LogOut size={16} />
               Logout
             </button>
+
           </div>
         </div>
       </header>
 
-      {/* Main */}
+      {/* MAIN */}
       <main className="max-w-7xl mx-auto px-6 py-8">
+
         <div className="mb-8">
-          <h2 className="text-xl font-semibold">Overview</h2>
+          <h2 className="text-xl font-semibold">
+            Overview
+          </h2>
+
           <p className="text-zinc-500 mt-1">
-            Monitor VidForge users, deposits and video generation.
+            Monitor VidForge users, deposits and
+            video generation.
           </p>
         </div>
 
-        {/* Main metrics */}
+        {/* MAIN METRICS */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-6">
+
           <MetricCard
             title="Total Users"
             value={stats.totalUsers.toLocaleString()}
@@ -211,10 +269,13 @@ export default function AdminPage() {
 
           <MetricCard
             title="Total Revenue"
-            value={`₦${stats.totalRevenue.toLocaleString('en-NG', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}`}
+            value={`₦${stats.totalRevenue.toLocaleString(
+              'en-NG',
+              {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              }
+            )}`}
             icon={<Wallet size={22} />}
           />
 
@@ -223,10 +284,12 @@ export default function AdminPage() {
             value={stats.totalCreditsSpent.toLocaleString()}
             icon={<CreditCard size={22} />}
           />
+
         </div>
 
-        {/* Secondary metrics */}
+        {/* SECONDARY METRICS */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-8">
+
           <MetricCard
             title="Credits Currently Held"
             value={stats.totalCredits.toLocaleString()}
@@ -247,32 +310,42 @@ export default function AdminPage() {
             icon={<CreditCard size={22} />}
             small
           />
+
         </div>
 
-        {/* Quick sections */}
+        {/* QUICK SECTIONS */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+
             <h3 className="text-lg font-semibold mb-2">
               Wallet & Revenue
             </h3>
 
             <p className="text-sm text-zinc-500 mb-5">
-              Deposits and payment activity will be managed from this area.
+              Deposits and payment activity will
+              be managed from this area.
             </p>
 
             <div className="text-3xl font-bold text-emerald-400">
-              ₦{stats.totalRevenue.toLocaleString('en-NG', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}
+              ₦
+              {stats.totalRevenue.toLocaleString(
+                'en-NG',
+                {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                }
+              )}
             </div>
 
             <p className="text-xs text-zinc-600 mt-2">
               Successful wallet deposits
             </p>
+
           </div>
 
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+
             <h3 className="text-lg font-semibold mb-2">
               Generation Activity
             </h3>
@@ -288,8 +361,11 @@ export default function AdminPage() {
             <p className="text-xs text-zinc-600 mt-2">
               Total credits spent on generated videos
             </p>
+
           </div>
+
         </div>
+
       </main>
     </div>
   );
@@ -308,17 +384,29 @@ function MetricCard({
 }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-zinc-500">{title}</p>
+
+        <p className="text-sm text-zinc-500">
+          {title}
+        </p>
 
         <div className="text-purple-400">
           {icon}
         </div>
+
       </div>
 
-      <p className={small ? 'text-2xl font-bold' : 'text-3xl font-bold'}>
+      <p
+        className={
+          small
+            ? 'text-2xl font-bold'
+            : 'text-3xl font-bold'
+        }
+      >
         {value}
       </p>
+
     </div>
   );
 }

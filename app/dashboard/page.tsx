@@ -9,6 +9,7 @@ import AppNavbar from '@/components/AppNavbar';
 export default function DashboardPage() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [credits, setCredits] = useState(0);
   
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,47 +19,20 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const checkUser = async () => {
-      // ✅ Get session FIRST — this is what was missing before
       const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!session) {
-        router.push('/login');
-        return;
-      }
-
-      // ✅ Session exists → now get user safely
+      if (!session) { router.push('/login'); return; }
       const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        router.push('/login');
-        return;
-      }
-
+      if (!user) { router.push('/login'); return; }
       setUser(user);
+      
+      const { data } = await supabase.from('profiles').select('credits').eq('id', user.id).single();
+      setCredits(data?.credits ?? 0);
       setLoading(false);
     };
-
     checkUser();
-
-    // ✅ Also listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        if (event === 'SIGNED_OUT' || !session) {
-          router.push('/login');
-        }
-      }
-    );
-
-    return () => subscription.unsubscribe();
   }, [supabase, router]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center">
-        <p className="text-purple-400 text-lg">Loading dashboard...</p>
-      </div>
-    );
-  }
+  if (loading) return <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center"><p>Loading...</p></div>;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white flex flex-col">
@@ -66,20 +40,20 @@ export default function DashboardPage() {
       
       <main className="flex-1 py-12 px-4">
         <div className="max-w-6xl mx-auto">
-          {/* Welcome */}
-          <div className="mb-10">
-            <h1 className="text-3xl font-bold mb-2">
-              Welcome, {user.email?.split('@')[0]} 👋
-            </h1>
-            <p className="text-zinc-400">What would you like to create today?</p>
+          <div className="mb-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold mb-2">Welcome, {user.email?.split('@')[0]} 👋</h1>
+              <p className="text-zinc-400">What would you like to create today?</p>
+            </div>
+            <div className="flex items-center gap-3 bg-zinc-900 p-3 rounded-xl border border-zinc-800">
+              <span className="text-zinc-400">Balance:</span>
+              <span className="text-emerald-400 font-bold text-lg">{credits}</span>
+              <a href="/top-up" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium">Top Up</a>
+            </div>
           </div>
 
-          {/* Create Options */}
           <div className="grid md:grid-cols-2 gap-6 mb-12">
-            <Link
-              href="/generate/music"
-              className="group p-6 bg-zinc-900 rounded-xl border border-zinc-800 hover:border-violet-500 transition-all"
-            >
+            <Link href="/generate/music" className="group p-6 bg-zinc-900 rounded-xl border border-zinc-800 hover:border-violet-500 transition-all">
               <div className="w-12 h-12 rounded-lg bg-violet-500/20 flex items-center justify-center mb-4">
                 <Image size={24} className="text-violet-400" />
               </div>
@@ -87,10 +61,7 @@ export default function DashboardPage() {
               <p className="text-zinc-400 text-sm">Upload an image, add music, generate a music video</p>
             </Link>
 
-            <Link
-              href="/generate/script"
-              className="group p-6 bg-zinc-900 rounded-xl border border-zinc-800 hover:border-fuchsia-500 transition-all"
-            >
+            <Link href="/generate/script" className="group p-6 bg-zinc-900 rounded-xl border border-zinc-800 hover:border-fuchsia-500 transition-all">
               <div className="w-12 h-12 rounded-lg bg-fuchsia-500/20 flex items-center justify-center mb-4">
                 <FileText size={24} className="text-fuchsia-400" />
               </div>
@@ -99,7 +70,6 @@ export default function DashboardPage() {
             </Link>
           </div>
 
-          {/* My Videos */}
           <div>
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Clock size={20} /> Your Recent Videos

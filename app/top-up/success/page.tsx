@@ -27,20 +27,12 @@ function SuccessContent() {
         );
 
         const { data: { session } } = await supabase.auth.getSession();
-        
-        // SAFE — no property access on null
-        if (!session) {
-          toast.info('Please log in to see updated balance');
-          setSyncing(false);
-          return;
-        }
-        if (!session.user) {
+        if (!session || !session.user) {
           toast.info('Please log in to see updated balance');
           setSyncing(false);
           return;
         }
 
-        // ONLY now safely access properties
         const userId = session.user.id;
         const addAmount = parseInt(added);
 
@@ -91,7 +83,7 @@ function SuccessContent() {
           
           <div className="bg-zinc-900 rounded-xl border border-emerald-800 p-6 mb-8">
             <p className="text-zinc-300 mb-4">Your credits are ready to use.</p>
-            <p className="text-sm text-zinc-500">Create your first video now!</p>
+            <p className="text-sm text-zinc-500">Go to Dashboard to start creating videos.</p>
           </div>
 
           <div className="space-y-3">

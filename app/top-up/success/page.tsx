@@ -13,12 +13,8 @@ function SuccessContent() {
   const [syncing, setSyncing] = useState(true);
   const [synced, setSynced] = useState(false);
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-
   useEffect(() => {
+    // ✅ Runs ONLY in browser — NEVER during build
     const syncCredits = async () => {
       if (!added) {
         setSyncing(false);
@@ -26,9 +22,15 @@ function SuccessContent() {
       }
 
       try {
+        const supabase = createBrowserClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        );
+
         const { data: { session } } = await supabase.auth.getSession();
-        // ✅ Safely check — no crash if no session/user
-        if (!session?.user) {
+        
+        // ✅ Safe check — no crash if no user
+        if (!session || !session.user) {
           toast.info('Please log in to see your updated balance');
           setSyncing(false);
           return;
@@ -53,16 +55,16 @@ function SuccessContent() {
 
         setSynced(true);
         toast.success(`✅ +${creditsToAdd} credits added!`);
-      } catch (err: any) {
+      } catch (err) {
         console.error('Sync error:', err);
-        toast.error('Payment confirmed — refresh to see balance');
+        toast.success('Payment confirmed! Refresh to see balance');
       } finally {
         setSyncing(false);
       }
     };
 
     syncCredits();
-  }, [added, supabase]);
+  }, [added]);
 
   return (
     <div className="max-w-md w-full text-center">

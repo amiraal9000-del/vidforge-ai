@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
 import { useRouter } from 'next/navigation';
 import {
   Users,
@@ -9,7 +8,6 @@ import {
   Wallet,
   CreditCard,
   TrendingUp,
-  LogOut,
   RefreshCw,
 } from 'lucide-react';
 
@@ -23,55 +21,34 @@ type DashboardStats = {
   totalCreditsSpent: number;
 };
 
-const emptyStats: DashboardStats = {
-  totalUsers: 0,
-  totalVideos: 0,
-  totalCredits: 0,
-  successfulDeposits: 0,
-  pendingDeposits: 0,
-  totalRevenue: 0,
-  totalCreditsSpent: 0,
-};
+export default function AdminOverviewPage() {
+  const router = useRouter();
 
-export default function AdminPage() {
+  const [stats, setStats] = useState<DashboardStats>({
+    totalUsers: 0,
+    totalVideos: 0,
+    totalCredits: 0,
+    successfulDeposits: 0,
+    pendingDeposits: 0,
+    totalRevenue: 0,
+    totalCreditsSpent: 0,
+  });
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [stats, setStats] = useState<DashboardStats>(emptyStats);
 
-  const router = useRouter();
-
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
-
-  const loadDashboard = async () => {
+  const loadStats = async () => {
     try {
       setError('');
 
-      /*
-       * First make sure there is a logged-in Supabase session.
-       */
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        router.replace('/admin/login');
-        return;
-      }
-
-      /*
-       * The actual admin authorization is handled again
-       * inside /api/admin/stats.
-       *
-       * The browser never receives the service-role key.
-       */
-      const response = await fetch('/api/admin/stats', {
-        method: 'GET',
-        cache: 'no-store',
-      });
+      const response = await fetch(
+        '/api/admin/stats',
+        {
+          method: 'GET',
+          cache: 'no-store',
+        }
+      );
 
       const data = await response.json();
 
@@ -81,34 +58,35 @@ export default function AdminPage() {
       }
 
       if (response.status === 403) {
-        await supabase.auth.signOut();
-        router.replace('/admin/login?error=unauthorized');
+        router.replace(
+          '/admin/login?error=unauthorized'
+        );
         return;
       }
 
       if (!response.ok) {
         throw new Error(
           data?.error ||
-            'Unable to load admin statistics.'
+            'Unable to load dashboard statistics.'
         );
       }
 
-      if (!data?.success || !data?.stats) {
+      if (!data?.stats) {
         throw new Error(
-          'Invalid statistics response.'
+          'No dashboard statistics were returned.'
         );
       }
 
       setStats(data.stats);
     } catch (err: any) {
       console.error(
-        'Admin dashboard error:',
+        'Admin overview error:',
         err
       );
 
       setError(
         err?.message ||
-          'Unable to load admin dashboard.'
+          'Unable to load dashboard statistics.'
       );
     } finally {
       setLoading(false);
@@ -117,267 +95,269 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    loadDashboard();
+    loadStats();
   }, []);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadDashboard();
+    await loadStats();
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.replace('/admin/login');
+  const formatNaira = (amount: number) => {
+    return `₦${Number(amount || 0).toLocaleString(
+      'en-NG',
+      {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }
+    )}`;
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-10 h-10 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mx-auto mb-4" />
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+        <div className="flex items-center justify-center py-24">
+          <div className="text-center">
+            <div className="w-10 h-10 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mx-auto mb-4" />
 
-          <p className="text-zinc-400">
-            Loading admin dashboard...
-          </p>
+            <p className="text-zinc-400">
+              Loading overview...
+            </p>
+          </div>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white">
+    <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
-      {/* HEADER */}
-      <header className="border-b border-zinc-800 bg-zinc-950/95">
-        <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
+      {/* Page heading */}
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
 
-          <div>
-            <h1 className="text-2xl font-bold">
-              VidForge{' '}
-              <span className="text-purple-400">
-                Admin
-              </span>
-            </h1>
+        <div>
+          <p className="text-sm text-purple-400 font-medium mb-2">
+            Dashboard
+          </p>
 
-            <p className="text-sm text-zinc-500 mt-1">
-              Business command center
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3">
-
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 transition disabled:opacity-50"
-            >
-              <RefreshCw
-                size={16}
-                className={
-                  refreshing
-                    ? 'animate-spin'
-                    : ''
-                }
-              />
-
-              Refresh
-            </button>
-
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-950/40 border border-red-900/50 text-red-400 hover:bg-red-900/40 transition"
-            >
-              <LogOut size={16} />
-
-              Logout
-            </button>
-
-          </div>
-        </div>
-      </header>
-
-      {/* MAIN */}
-      <main className="max-w-7xl mx-auto px-6 py-8">
-
-        <div className="mb-8">
-          <h2 className="text-xl font-semibold">
+          <h1 className="text-3xl font-bold text-white">
             Overview
-          </h2>
+          </h1>
 
-          <p className="text-zinc-500 mt-1">
-            Monitor VidForge users, deposits and
-            video generation.
+          <p className="text-zinc-500 mt-2">
+            A quick view of your VidForge business.
           </p>
         </div>
 
-        {/* ERROR */}
-        {error && (
-          <div className="mb-6 rounded-xl border border-red-800 bg-red-950/40 px-5 py-4 text-red-300">
-            <p className="font-medium">
-              Dashboard error
-            </p>
-
-            <p className="text-sm mt-1">
-              {error}
-            </p>
-          </div>
-        )}
-
-        {/* MAIN METRICS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-6">
-
-          <MetricCard
-            title="Total Users"
-            value={stats.totalUsers.toLocaleString()}
-            icon={<Users size={22} />}
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="self-start sm:self-auto flex items-center gap-2 px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 transition disabled:opacity-50"
+        >
+          <RefreshCw
+            size={16}
+            className={
+              refreshing
+                ? 'animate-spin'
+                : ''
+            }
           />
 
-          <MetricCard
-            title="Videos Generated"
-            value={stats.totalVideos.toLocaleString()}
-            icon={<Video size={22} />}
-          />
+          {refreshing
+            ? 'Refreshing...'
+            : 'Refresh'}
+        </button>
 
-          <MetricCard
-            title="Total Revenue"
-            value={`₦${stats.totalRevenue.toLocaleString(
-              'en-NG',
-              {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              }
-            )}`}
-            icon={<Wallet size={22} />}
-          />
+      </div>
 
-          <MetricCard
-            title="Credits Spent"
-            value={stats.totalCreditsSpent.toLocaleString()}
-            icon={<CreditCard size={22} />}
-          />
+      {/* Error */}
+      {error && (
+        <div className="mb-6 rounded-xl border border-red-800 bg-red-950/40 px-5 py-4">
+          <p className="font-medium text-red-300">
+            Dashboard error
+          </p>
 
+          <p className="text-sm text-red-400 mt-1">
+            {error}
+          </p>
         </div>
+      )}
 
-        {/* SECONDARY METRICS */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-8">
+      {/* Main statistics */}
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
 
-          <MetricCard
-            title="Credits Currently Held"
-            value={stats.totalCredits.toLocaleString()}
-            icon={<TrendingUp size={22} />}
-            small
-          />
+        <StatCard
+          title="Total Users"
+          value={stats.totalUsers.toLocaleString()}
+          description="Registered VidForge users"
+          icon={<Users size={22} />}
+        />
 
-          <MetricCard
-            title="Successful Deposits"
-            value={stats.successfulDeposits.toLocaleString()}
-            icon={<Wallet size={22} />}
-            small
-          />
+        <StatCard
+          title="Videos Generated"
+          value={stats.totalVideos.toLocaleString()}
+          description="All generated videos"
+          icon={<Video size={22} />}
+        />
 
-          <MetricCard
-            title="Pending Deposits"
-            value={stats.pendingDeposits.toLocaleString()}
-            icon={<CreditCard size={22} />}
-            small
-          />
+        <StatCard
+          title="Revenue"
+          value={formatNaira(stats.totalRevenue)}
+          description="Successful wallet deposits"
+          icon={<Wallet size={22} />}
+        />
 
-        </div>
+        <StatCard
+          title="Credits Spent"
+          value={stats.totalCreditsSpent.toLocaleString()}
+          description="Credits consumed by generation"
+          icon={<CreditCard size={22} />}
+        />
 
-        {/* QUICK SECTIONS */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      </section>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+      {/* Secondary statistics */}
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-5 mt-5">
 
-            <h3 className="text-lg font-semibold mb-2">
-              Wallet & Revenue
-            </h3>
+        <StatCard
+          title="Credits Held"
+          value={stats.totalCredits.toLocaleString()}
+          description="Credits currently held by users"
+          icon={<TrendingUp size={22} />}
+          compact
+        />
 
-            <p className="text-sm text-zinc-500 mb-5">
-              Deposits and payment activity will
-              be managed from this area.
-            </p>
+        <StatCard
+          title="Successful Deposits"
+          value={stats.successfulDeposits.toLocaleString()}
+          description="Completed wallet deposits"
+          icon={<Wallet size={22} />}
+          compact
+        />
 
-            <div className="text-3xl font-bold text-emerald-400">
-              ₦
-              {stats.totalRevenue.toLocaleString(
-                'en-NG',
-                {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                }
-              )}
-            </div>
+        <StatCard
+          title="Pending Deposits"
+          value={stats.pendingDeposits.toLocaleString()}
+          description="Awaiting payment confirmation"
+          icon={<CreditCard size={22} />}
+          compact
+        />
 
-            <p className="text-xs text-zinc-600 mt-2">
-              Successful wallet deposits
-            </p>
+      </section>
 
-          </div>
+      {/* Admin sections */}
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-5 mt-8">
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+        <AdminSectionCard
+          title="Users"
+          description="View users, balances and account activity."
+          href="/admin/users"
+          icon={<Users size={22} />}
+        />
 
-            <h3 className="text-lg font-semibold mb-2">
-              Generation Activity
-            </h3>
+        <AdminSectionCard
+          title="Deposits & Revenue"
+          description="Inspect wallet deposits, payments and revenue."
+          href="/admin/deposits"
+          icon={<Wallet size={22} />}
+        />
 
-            <p className="text-sm text-zinc-500 mb-5">
-              Credits consumed by video generation.
-            </p>
+        <AdminSectionCard
+          title="Generations"
+          description="Inspect generated videos and credit spending."
+          href="/admin/generations"
+          icon={<Video size={22} />}
+        />
 
-            <div className="text-3xl font-bold text-purple-400">
-              {stats.totalCreditsSpent.toLocaleString()}
-            </div>
+      </section>
 
-            <p className="text-xs text-zinc-600 mt-2">
-              Total credits spent on generated videos
-            </p>
-
-          </div>
-
-        </div>
-
-      </main>
-    </div>
+    </main>
   );
 }
 
-function MetricCard({
+function StatCard({
   title,
   value,
+  description,
   icon,
-  small = false,
+  compact = false,
 }: {
   title: string;
   value: string;
+  description: string;
   icon: React.ReactNode;
-  small?: boolean;
+  compact?: boolean;
 }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
 
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-start justify-between gap-4">
 
-        <p className="text-sm text-zinc-500">
-          {title}
-        </p>
+        <div className="min-w-0">
+          <p className="text-sm text-zinc-500">
+            {title}
+          </p>
 
-        <div className="text-purple-400">
+          <p
+            className={
+              compact
+                ? 'text-2xl font-bold text-white mt-3 break-words'
+                : 'text-3xl font-bold text-white mt-3 break-words'
+            }
+          >
+            {value}
+          </p>
+        </div>
+
+        <div className="shrink-0 w-11 h-11 rounded-xl bg-purple-600/10 border border-purple-500/20 text-purple-400 flex items-center justify-center">
           {icon}
         </div>
 
       </div>
 
-      <p
-        className={
-          small
-            ? 'text-2xl font-bold'
-            : 'text-3xl font-bold'
-        }
-      >
-        {value}
+      <p className="text-xs text-zinc-600 mt-4">
+        {description}
       </p>
 
     </div>
+  );
+}
+
+function AdminSectionCard({
+  title,
+  description,
+  href,
+  icon,
+}: {
+  title: string;
+  description: string;
+  href: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={() => {
+        window.location.href = href;
+      }}
+      className="text-left bg-zinc-900 border border-zinc-800 rounded-2xl p-6 hover:border-purple-500/40 hover:bg-zinc-900/80 transition group"
+    >
+
+      <div className="w-11 h-11 rounded-xl bg-purple-600/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mb-5 group-hover:bg-purple-600/20 transition">
+        {icon}
+      </div>
+
+      <h3 className="text-lg font-semibold text-white">
+        {title}
+      </h3>
+
+      <p className="text-sm text-zinc-500 mt-2 leading-6">
+        {description}
+      </p>
+
+      <p className="text-sm text-purple-400 mt-5">
+        Open section →
+      </p>
+
+    </button>
   );
 }

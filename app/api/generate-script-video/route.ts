@@ -26,15 +26,11 @@ type VideoJobRecord = {
 };
 
 if (!SUPABASE_URL) {
-  console.error(
-    "NEXT_PUBLIC_SUPABASE_URL is missing."
-  );
+  console.error("NEXT_PUBLIC_SUPABASE_URL is missing.");
 }
 
 if (!SUPABASE_SERVICE_ROLE_KEY) {
-  console.error(
-    "SUPABASE_SERVICE_ROLE_KEY is missing."
-  );
+  console.error("SUPABASE_SERVICE_ROLE_KEY is missing.");
 }
 
 const supabaseAdmin = createClient(
@@ -52,10 +48,7 @@ const supabaseAdmin = createClient(
    BASIC HELPERS
 ========================================================= */
 
-function json(
-  data: unknown,
-  status = 200
-) {
+function json(data: unknown, status = 200) {
   return NextResponse.json(data, { status });
 }
 
@@ -93,6 +86,102 @@ function getPricing(
 
   return {
     cost: hasAudio ? 80 : 50,
+  };
+}
+
+/* =========================================================
+   QUOTED DIALOGUE
+========================================================= */
+
+/**
+ * Extract only the words that appear inside quotation marks.
+ *
+ * Supported:
+ * "Hello there."
+ * “Hello there.”
+ *
+ * Everything outside quotes is treated as visual/action
+ * direction and is NOT considered spoken dialogue.
+ */
+function extractQuotedDialogue(
+  script: string
+): {
+  spokenText: string;
+  hasUnmatchedQuote: boolean;
+} {
+  const segments: string[] = [];
+
+  let straightOpen = false;
+  let curlyOpen = false;
+
+  let currentStraight = "";
+  let currentCurly = "";
+
+  for (let i = 0; i < script.length; i++) {
+    const char = script[i];
+
+    /* Straight quote */
+    if (char === '"') {
+      if (straightOpen) {
+        if (currentStraight.trim()) {
+          segments.push(currentStraight.trim());
+        }
+
+        currentStraight = "";
+        straightOpen = false;
+      } else {
+        straightOpen = true;
+        currentStraight = "";
+      }
+
+      continue;
+    }
+
+    /* Curly opening quote */
+    if (char === "“") {
+      if (curlyOpen) {
+        /*
+         * If another opening curly quote appears while
+         * already inside one, keep it as text.
+         */
+        currentCurly += char;
+      } else {
+        curlyOpen = true;
+        currentCurly = "";
+      }
+
+      continue;
+    }
+
+    /* Curly closing quote */
+    if (char === "”") {
+      if (curlyOpen) {
+        if (currentCurly.trim()) {
+          segments.push(currentCurly.trim());
+        }
+
+        currentCurly = "";
+        curlyOpen = false;
+      }
+
+      continue;
+    }
+
+    if (straightOpen) {
+      currentStraight += char;
+    }
+
+    if (curlyOpen) {
+      currentCurly += char;
+    }
+  }
+
+  const hasUnmatchedQuote =
+    straightOpen || curlyOpen;
+
+  return {
+    spokenText: segments.join(" ").trim(),
+    hasUnmatchedQuote,
   };
 }
 
@@ -268,17 +357,39 @@ async function refundCredits(
 
 function buildVeoPrompt(
   script: string,
+  spokenText: string,
   duration: Duration,
   hasAudio: boolean
 ) {
-  const audioInstruction =
-    hasAudio
-      ? `
+  const audioInstruction = hasAudio
+    ? `
+AUDIO AND DIALOGUE RULES:
+
 Generate natural synchronized audio.
-The spoken narration should follow the supplied script.
-Use clear, natural speech and appropriate background ambience.
+
+IMPORTANT:
+Only the text inside quotation marks is spoken dialogue.
+
+The quoted dialogue supplied separately below is the ONLY dialogue
+that should be spoken by the subject.
+
+Do NOT speak the visual instructions.
+Do NOT read the camera directions.
+Do NOT read descriptions outside quotation marks.
+Do NOT turn the entire SCRIPT into narration.
+
+SPOKEN DIALOGUE:
+"${spokenText}"
+
+The subject should speak the quoted dialogue naturally,
+with realistic timing, lip synchronization, facial expression,
+and appropriate emotion.
+
+Use subtle natural background ambience where appropriate.
 `
-      : `
+    : `
+AUDIO:
+
 Do not generate spoken narration or dialogue.
 Keep the video silent.
 `;
@@ -286,8 +397,23 @@ Keep the video silent.
   return `
 Create a polished cinematic vertical video using the supplied image as the first frame.
 
-SCRIPT:
+The script contains TWO different types of information:
+
+1. VISUAL / PERFORMANCE INSTRUCTIONS
+   These are the words outside quotation marks.
+   Use them to control the subject's actions, expressions,
+   camera movement, environment, pacing, and visual storytelling.
+
+2. SPOKEN DIALOGUE
+   Only words inside quotation marks are spoken aloud.
+   Quotation marks may be straight ("...") or curly (“...”).
+   Do not speak anything outside the quotation marks.
+
+FULL SCRIPT:
 ${script}
+
+EXTRACTED SPOKEN DIALOGUE:
+${spokenText || "(No spoken dialogue.)"}
 
 VIDEO:
 - Duration: ${duration} seconds.
@@ -295,6 +421,7 @@ VIDEO:
 - Preserve the identity and appearance of the main subject.
 - Start from the supplied image.
 - Animate the subject naturally.
+- Follow the visual instructions in the FULL SCRIPT.
 - Use smooth cinematic camera movement.
 - Maintain strong visual consistency.
 - Do not unnecessarily change the scene.
@@ -306,7 +433,6 @@ VIDEO:
 - Keep the result realistic and professional.
 - Make it suitable for social media.
 
-AUDIO:
 ${audioInstruction}
 `.trim();
 }
@@ -409,10 +535,6 @@ async function uploadInputImage(
     );
   }
 
-  /*
-   * Normal browser/public URL.
-   * Useful if the bucket is public.
-   */
   const {
     data: publicData,
   } =
@@ -423,12 +545,6 @@ async function uploadInputImage(
   const publicUrl =
     publicData?.publicUrl || "";
 
-  /*
-   * IMPORTANT:
-   * Create a temporary signed URL for OpenRouter.
-   *
-   * This works even when the bucket is private.
-   */
   const {
     data: signedData,
     error: signedError,
@@ -451,9 +567,7 @@ async function uploadInputImage(
     );
   }
 
-  if (
-    !signedData?.signedUrl
-  ) {
+  if (!signedData?.signedUrl) {
     throw new Error(
       "Image uploaded, but Supabase did not return a signed URL."
     );
@@ -850,11 +964,8 @@ function extractUnsignedVideoUrl(
     const candidate of candidates
   ) {
     if (
-      typeof candidate ===
-        "string" &&
-      candidate.startsWith(
-        "http"
-      )
+      typeof candidate === "string" &&
+      candidate.startsWith("http")
     ) {
       return candidate;
     }
@@ -880,9 +991,7 @@ async function downloadOpenRouterVideo(
     );
 
     const response =
-      await fetch(
-        unsignedUrl
-      );
+      await fetch(unsignedUrl);
 
     if (!response.ok) {
       throw new Error(
@@ -925,8 +1034,7 @@ async function downloadOpenRouterVideo(
 
     throw new Error(
       `OpenRouter video content retrieval failed: ${
-        text ||
-        response.status
+        text || response.status
       }`
     );
   }
@@ -1071,6 +1179,9 @@ export async function POST(
     const scriptValue =
       formData.get("script");
 
+    const spokenTextValue =
+      formData.get("spokenText");
+
     const imageValue =
       formData.get("image");
 
@@ -1087,6 +1198,9 @@ export async function POST(
           user.id,
         hasScript:
           typeof scriptValue ===
+          "string",
+        hasSpokenText:
+          typeof spokenTextValue ===
           "string",
         imageIsFile:
           imageValue instanceof File,
@@ -1110,8 +1224,7 @@ export async function POST(
     ----------------------------------------------------- */
 
     if (
-      typeof scriptValue !==
-        "string" ||
+      typeof scriptValue !== "string" ||
       !scriptValue.trim()
     ) {
       return json(
@@ -1185,6 +1298,85 @@ export async function POST(
     const script =
       scriptValue.trim();
 
+    /*
+     * The frontend now sends the extracted spoken text.
+     *
+     * If it is not supplied, the backend extracts it itself.
+     * This keeps the API backwards-compatible.
+     */
+    const extractedDialogue =
+      extractQuotedDialogue(
+        script
+      );
+
+    let spokenText =
+      extractedDialogue.spokenText;
+
+    if (
+      typeof spokenTextValue ===
+        "string" &&
+      spokenTextValue.trim()
+    ) {
+      spokenText =
+        spokenTextValue.trim();
+    }
+
+    console.log(
+      "Dialogue analysis:",
+      {
+        hasAudio,
+        spokenText,
+        spokenWordCount:
+          spokenText
+            ? spokenText
+                .split(/\s+/)
+                .filter(Boolean)
+                .length
+            : 0,
+        hasUnmatchedQuote:
+          extractedDialogue.hasUnmatchedQuote,
+      }
+    );
+
+    /*
+     * If audio is enabled, do not allow an empty spoken
+     * dialogue to accidentally turn the whole script into
+     * narration.
+     */
+    if (
+      hasAudio &&
+      !spokenText
+    ) {
+      return json(
+        {
+          error:
+            'No spoken dialogue was found. Put the words you want spoken inside quotation marks, for example: She smiles and says, "Believe in yourself."',
+          stage:
+            "dialogue_validation",
+        },
+        400
+      );
+    }
+
+    /*
+     * Do not silently accept broken quotation marks.
+     * This protects the intended dialogue behavior.
+     */
+    if (
+      hasAudio &&
+      extractedDialogue.hasUnmatchedQuote
+    ) {
+      return json(
+        {
+          error:
+            "Your quotation marks are not balanced. Please make sure every opening quote has a matching closing quote.",
+          stage:
+            "dialogue_validation",
+        },
+        400
+      );
+    }
+
     const { cost } =
       getPricing(
         duration,
@@ -1226,10 +1418,6 @@ export async function POST(
         imageValue
       );
 
-    /*
-     * Save the permanent/public URL to our DB when
-     * available. OpenRouter receives the signed URL.
-     */
     const imageUrlForDatabase =
       uploaded.publicUrl ||
       uploaded.providerUrl;
@@ -1271,15 +1459,25 @@ export async function POST(
       true;
 
     /* -----------------------------------------------------
-       PROMPT
+       BUILD VEO PROMPT
     ----------------------------------------------------- */
 
     const veoPrompt =
       buildVeoPrompt(
         script,
+        spokenText,
         duration,
         hasAudio
       );
+
+    console.log(
+      "Final Veo prompt prepared:",
+      {
+        duration,
+        hasAudio,
+        spokenText,
+      }
+    );
 
     /* -----------------------------------------------------
        SUBMIT TO OPENROUTER
@@ -1294,11 +1492,6 @@ export async function POST(
             prompt:
               veoPrompt,
 
-            /*
-             * IMPORTANT:
-             * Send signed URL to OpenRouter so it can
-             * actually fetch the Supabase image.
-             */
             imageUrl:
               uploaded.providerUrl,
 
@@ -1336,9 +1529,7 @@ export async function POST(
       return json(
         {
           error:
-            errorMessage(
-              error
-            ),
+            errorMessage(error),
           stage:
             "openrouter_submission",
           remainingCredits:
@@ -1357,19 +1548,50 @@ export async function POST(
     ----------------------------------------------------- */
 
     if (recordId) {
-      try {
-        await attachJobToVideoRecord(
-          recordId,
-          jobId
-        );
-      } catch (error) {
-        /*
-         * Do NOT refund.
-         * OpenRouter job already exists.
-         */
+      let attached = false;
+
+      /*
+       * Try twice because the provider job already exists.
+       * We do NOT refund if this database update fails.
+       */
+      for (
+        let attempt = 1;
+        attempt <= 2;
+        attempt++
+      ) {
+        try {
+          await attachJobToVideoRecord(
+            recordId,
+            jobId
+          );
+
+          attached = true;
+          break;
+        } catch (error) {
+          console.error(
+            `Could not attach job ID to database (attempt ${attempt}):`,
+            error
+          );
+
+          if (attempt === 1) {
+            await new Promise(
+              (resolve) =>
+                setTimeout(
+                  resolve,
+                  300
+                )
+            );
+          }
+        }
+      }
+
+      if (!attached) {
         console.error(
-          "Could not attach job ID to database:",
-          error
+          "WARNING: OpenRouter job exists but database job attachment failed.",
+          {
+            recordId,
+            jobId,
+          }
         );
       }
     }
@@ -1396,8 +1618,10 @@ export async function POST(
     );
 
     /*
-     * Refund only if we know credits were deducted
-     * and the provider job was never created.
+     * Refund only when:
+     * - credits were deducted
+     * - a database record exists
+     * - no provider job was attached
      */
     if (
       userId &&
@@ -1454,11 +1678,9 @@ export async function POST(
     return json(
       {
         error:
-          errorMessage(
-            error
-          ),
-          stage:
-            "post_generation_request",
+          errorMessage(error),
+        stage:
+          "post_generation_request",
       },
       500
     );
@@ -1490,9 +1712,7 @@ export async function GET(
       );
 
     const url =
-      new URL(
-        request.url
-      );
+      new URL(request.url);
 
     const jobId =
       url.searchParams.get(
@@ -1577,14 +1797,13 @@ export async function GET(
        FAILED
     ----------------------------------------------------- */
 
-    const failedStatuses =
-      [
-        "failed",
-        "error",
-        "cancelled",
-        "canceled",
-        "expired",
-      ];
+    const failedStatuses = [
+      "failed",
+      "error",
+      "cancelled",
+      "canceled",
+      "expired",
+    ];
 
     if (
       failedStatuses.includes(
@@ -1609,8 +1828,7 @@ export async function GET(
         );
 
         if (
-          refundAmount >
-          0
+          refundAmount > 0
         ) {
           await refundCredits(
             user.id,
@@ -1635,13 +1853,12 @@ export async function GET(
        COMPLETED?
     ----------------------------------------------------- */
 
-    const completedStatuses =
-      [
-        "completed",
-        "complete",
-        "succeeded",
-        "success",
-      ];
+    const completedStatuses = [
+      "completed",
+      "complete",
+      "succeeded",
+      "success",
+    ];
 
     const providerVideoUrl =
       extractUnsignedVideoUrl(
@@ -1723,8 +1940,7 @@ export async function GET(
 
     if (
       !videoBuffer ||
-      videoBuffer.length ===
-        0
+      videoBuffer.length === 0
     ) {
       await markVideoFailed(
         user.id,
@@ -1815,7 +2031,7 @@ export async function GET(
       /*
        * DO NOT REFUND.
        *
-       * The MP4 already exists.
+       * The MP4 already exists in Supabase.
        */
       console.error(
         "Video DB completion update failed:",
@@ -1867,9 +2083,7 @@ export async function GET(
     return json(
       {
         error:
-          errorMessage(
-            error
-          ),
+          errorMessage(error),
         stage:
           "video_polling",
       },

@@ -125,6 +125,8 @@ export default function ScriptGeneratorPage() {
   const [videoReady, setVideoReady] = useState(false);
   const [videoError, setVideoError] = useState("");
 
+  const [downloading, setDownloading] = useState(false);
+
   const pollingRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -294,7 +296,7 @@ export default function ScriptGeneratorPage() {
 
     if (withAudio && missingSpokenDialogue) {
       toast.error(
-        'Put the words you want spoken inside quotation marks.'
+        "Put the words you want spoken inside quotation marks."
       );
       return false;
     }
@@ -522,12 +524,140 @@ export default function ScriptGeneratorPage() {
     }
 
     setVideoError(
-      "The video is taking longer than expected. Please check History shortly."
+      "The video is taking longer than expected. Please check My Videos shortly."
     );
 
     setGenerationStatus("");
     setGenerating(false);
     pollingRef.current = false;
+  }
+
+  async function downloadVideo() {
+    if (!videoUrl || downloading) return;
+
+    setDownloading(true);
+    setVideoError("");
+
+    try {
+      /*
+       * First try to fetch the MP4 ourselves and create a local
+       * download/share file. This gives iPhone users the best
+       * chance of getting the native Save/Share experience.
+       */
+      const response = await fetch(videoUrl, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Video download failed (${response.status}).`
+        );
+      }
+
+      const blob = await response.blob();
+
+      if (!blob.size) {
+        throw new Error("The downloaded video file is empty.");
+      }
+
+      const fileName = `vidforge-${duration}s-${Date.now()}.mp4`;
+
+      const file = new File([blob], fileName, {
+        type: "video/mp4",
+      });
+
+      /*
+       * On iPhone/iPad, use the native Share sheet when supported.
+       * From there the user can choose "Save to Files" or another
+       * destination available on their device.
+       */
+      if (
+        typeof navigator !== "undefined" &&
+        "share" in navigator
+      ) {
+        const nav = navigator as Navigator & {
+          canShare?: (data?: ShareData) => boolean;
+          share: (data?: ShareData) => Promise<void>;
+        };
+
+        const shareData: ShareData = {
+          files: [file],
+          title: "VidForge AI Video",
+          text: "My video generated with VidForge AI.",
+        };
+
+        const canShareFiles =
+          typeof nav.canShare === "function"
+            ? nav.canShare({ files: [file] })
+            : true;
+
+        if (canShareFiles) {
+          await nav.share(shareData);
+
+          toast.success(
+            "Video ready. Choose Save to Files to keep it on your iPhone."
+          );
+
+          return;
+        }
+      }
+
+      /*
+       * Desktop/Android/browser fallback.
+       */
+      const objectUrl = URL.createObjectURL(blob);
+
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = fileName;
+      anchor.style.display = "none";
+
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+      }, 5000);
+
+      toast.success("Video download started.");
+    } catch (error) {
+      console.error(
+        "[VidForge frontend] Download error:",
+        error
+      );
+
+      /*
+       * If iOS/browser blocks the direct fetch or download,
+       * give the user a clean fallback instead of leaving them
+       * wondering what happened.
+       */
+      try {
+        window.open(videoUrl, "_blank", "noopener,noreferrer");
+
+        toast.success(
+          "Video opened. On iPhone, tap Share → Save to Files."
+        );
+      } catch {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Could not download the video.";
+
+        setVideoError(message);
+
+        toast.error(
+          "Download could not start. Please open My Videos and try again."
+        );
+      }
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  function goToMyVideos() {
+    window.location.href = "/history";
   }
 
   function resetGenerator() {
@@ -540,11 +670,12 @@ export default function ScriptGeneratorPage() {
     setVideoReady(false);
     setVideoError("");
     setShowReview(false);
+    setDownloading(false);
   }
 
   return (
     <div className="min-h-screen bg-black text-white">
-    <AppNavbar user={user} />
+      <AppNavbar user={user} />
 
       <main className="mx-auto max-w-5xl px-4 py-8">
         <div className="mb-8">
@@ -566,44 +697,136 @@ export default function ScriptGeneratorPage() {
 
         {videoReady && videoUrl ? (
           <section className="mb-8 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-            <div className="mb-4 flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-semibold">
-                  Your video is ready
-                </h2>
+            {/* SUCCESS HEADER */}
+            <div className="rounded-xl border border-green-500/20 bg-green-500/[0.06] p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-500/15 text-lg">
+                  ✓
+                </div>
 
-                <p className="text-sm text-white/50">
-                  Generated and saved successfully.
-                </p>
+                <div>
+                  <h2 className="text-xl font-semibold">
+                    Your video is ready! 🎉
+                  </h2>
+
+                  <p className="mt-1 text-sm text-white/60">
+                    Your {duration}-second video has been
+                    generated and saved successfully.
+                  </p>
+
+                  <p className="mt-2 text-sm text-white/70">
+                    You can watch it here, download it, or
+                    find it anytime in <strong>My Videos</strong>.
+                  </p>
+                </div>
               </div>
+            </div>
+
+            {/* VIDEO */}
+            <div className="mt-5">
+              <video
+                ref={videoRef}
+                src={videoUrl}
+                controls
+                playsInline
+                preload="metadata"
+                className="mx-auto max-h-[700px] w-full rounded-xl bg-black"
+                onError={() => {
+                  setVideoError(
+                    "The generated video URL could not be played."
+                  );
+                }}
+              />
+            </div>
+
+            {/* ACTION BUTTONS */}
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={downloadVideo}
+                disabled={downloading}
+                className="flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-4 font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="text-lg">
+                  {downloading ? "⏳" : "↓"}
+                </span>
+
+                {downloading
+                  ? "Preparing Video..."
+                  : "Download / Save Video"}
+              </button>
 
               <button
                 type="button"
-                onClick={resetGenerator}
-                className="rounded-lg border border-white/10 px-4 py-2 text-sm hover:bg-white/10"
+                onClick={goToMyVideos}
+                className="flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.05] px-5 py-4 font-semibold transition hover:bg-white/10"
               >
-                Create another
+                <span className="text-lg">
+                  →
+                </span>
+
+                Go to My Videos
               </button>
             </div>
 
-            <video
-              ref={videoRef}
-              src={videoUrl}
-              controls
-              playsInline
-              className="mx-auto max-h-[700px] w-full rounded-xl bg-black"
-              onError={() => {
-                setVideoError(
-                  "The generated video URL could not be played."
-                );
-              }}
-            />
+            {/* DOWNLOAD HELP */}
+            <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4">
+              <div className="text-sm font-medium">
+                Want to save it to your phone?
+              </div>
+
+              <p className="mt-1 text-xs leading-5 text-white/45">
+                On iPhone, tap{" "}
+                <span className="text-white/70">
+                  Download / Save Video
+                </span>
+                , then choose{" "}
+                <span className="text-white/70">
+                  Save to Files
+                </span>{" "}
+                from the Share menu. You can also find the
+                video anytime in My Videos.
+              </p>
+            </div>
 
             {videoError && (
               <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
                 {videoError}
               </div>
             )}
+
+            {/* SECONDARY ACTION */}
+            <div className="mt-5 flex justify-center">
+              <button
+                type="button"
+                onClick={resetGenerator}
+                className="rounded-lg border border-white/10 px-5 py-2.5 text-sm text-white/70 transition hover:bg-white/10 hover:text-white"
+              >
+                Create another video
+              </button>
+            </div>
+
+            {/* MY VIDEOS CALLOUT */}
+            <button
+              type="button"
+              onClick={goToMyVideos}
+              className="mt-5 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:bg-white/[0.06]"
+            >
+              <div>
+                <div className="text-sm font-semibold">
+                  Your video is saved
+                </div>
+
+                <div className="mt-1 text-xs text-white/40">
+                  Open My Videos to see all your generated
+                  videos.
+                </div>
+              </div>
+
+              <div className="text-xl text-white/60">
+                →
+              </div>
+            </button>
           </section>
         ) : null}
 
@@ -626,6 +849,7 @@ export default function ScriptGeneratorPage() {
                     <div className="text-lg">
                       Upload an image
                     </div>
+
                     <div className="mt-1 text-sm">
                       PNG, JPG or WebP · Max 10MB
                     </div>
@@ -880,6 +1104,7 @@ The camera slowly moves closer with realistic cinematic lighting.`}
                   <div className="text-white/40">
                     Duration
                   </div>
+
                   <div className="mt-1 font-semibold">
                     {duration}s
                   </div>
@@ -889,6 +1114,7 @@ The camera slowly moves closer with realistic cinematic lighting.`}
                   <div className="text-white/40">
                     Audio
                   </div>
+
                   <div className="mt-1 font-semibold">
                     {withAudio ? "On" : "Off"}
                   </div>
@@ -898,6 +1124,7 @@ The camera slowly moves closer with realistic cinematic lighting.`}
                   <div className="text-white/40">
                     Cost
                   </div>
+
                   <div className="mt-1 font-semibold">
                     {currentCost}
                   </div>

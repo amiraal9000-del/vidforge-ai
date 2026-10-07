@@ -6,31 +6,38 @@ export const dynamic = "force-dynamic";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL || "https://vidforgeai.com.ng";
 
-const OPENROUTER_VIDEO_MODEL = "google/veo-3.1-lite";
-const STORAGE_BUCKET = "input-images";
+const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+const MODEL = "google/veo-3.1-lite";
+const BUCKET = "input-images";
 
-type Duration = 4 | 6 | 8;
+const PRICING: Record<number, { audio: number; silent: number }> = {
+  4: { audio: 40, silent: 25 },
+  6: { audio: 60, silent: 40 },
+  8: { audio: 80, silent: 50 },
+};
 
-type VideoJobRecord = {
+type ParsedDialogue = {
+  spokenText: string;
+  hasUnmatchedQuote: boolean;
+};
+
+type VideoRow = {
   id: string;
   user_id: string;
   prompt: string | null;
   image_url: string | null;
   video_url: string | null;
-  duration: number;
-  cost: number;
-  has_audio: boolean;
+  duration: number | null;
+  cost: number | null;
+  has_audio?: boolean | null;
 };
 
-if (!SUPABASE_URL) {
-  console.error("NEXT_PUBLIC_SUPABASE_URL is missing.");
-}
-
-if (!SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("SUPABASE_SERVICE_ROLE_KEY is missing.");
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("[VidForge] Missing Supabase environment variables");
 }
 
 const supabaseAdmin = createClient(
@@ -44,71 +51,23 @@ const supabaseAdmin = createClient(
   }
 );
 
-/* =========================================================
-   BASIC HELPERS
-========================================================= */
-
-function json(data: unknown, status = 200) {
-  return NextResponse.json(data, { status });
+function jsonError(message: string, status = 500, extra?: unknown) {
+  console.error("[VidForge]", message, extra ?? "");
+  return NextResponse.json(
+    {
+      error: message,
+      details:
+        extra instanceof Error
+          ? extra.message
+          : typeof extra === "string"
+            ? extra
+            : undefined,
+    },
+    { status }
+  );
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (typeof error === "string") {
-    return error;
-  }
-
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return "Unknown error";
-  }
-}
-
-function getPricing(
-  duration: Duration,
-  hasAudio: boolean
-) {
-  if (duration === 4) {
-    return {
-      cost: hasAudio ? 40 : 25,
-    };
-  }
-
-  if (duration === 6) {
-    return {
-      cost: hasAudio ? 60 : 40,
-    };
-  }
-
-  return {
-    cost: hasAudio ? 80 : 50,
-  };
-}
-
-/* =========================================================
-   QUOTED DIALOGUE
-========================================================= */
-
-/**
- * Extract only the words that appear inside quotation marks.
- *
- * Supported:
- * "Hello there."
- * “Hello there.”
- *
- * Everything outside quotes is treated as visual/action
- * direction and is NOT considered spoken dialogue.
- */
-function extractQuotedDialogue(
-  script: string
-): {
-  spokenText: string;
-  hasUnmatchedQuote: boolean;
-} {
+function extractQuotedDialogue(text: string): ParsedDialogue {
   const segments: string[] = [];
 
   let straightOpen = false;
@@ -117,10 +76,9 @@ function extractQuotedDialogue(
   let currentStraight = "";
   let currentCurly = "";
 
-  for (let i = 0; i < script.length; i++) {
-    const char = script[i];
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
 
-    /* Straight quote */
     if (char === '"') {
       if (straightOpen) {
         if (currentStraight.trim()) {
@@ -137,15 +95,8 @@ function extractQuotedDialogue(
       continue;
     }
 
-    /* Curly opening quote */
     if (char === "“") {
-      if (curlyOpen) {
-        /*
-         * If another opening curly quote appears while
-         * already inside one, keep it as text.
-         */
-        currentCurly += char;
-      } else {
+      if (!curlyOpen) {
         curlyOpen = true;
         currentCurly = "";
       }
@@ -153,7 +104,6 @@ function extractQuotedDialogue(
       continue;
     }
 
-    /* Curly closing quote */
     if (char === "”") {
       if (curlyOpen) {
         if (currentCurly.trim()) {
@@ -176,270 +126,126 @@ function extractQuotedDialogue(
     }
   }
 
-  const hasUnmatchedQuote =
-    straightOpen || curlyOpen;
-
   return {
     spokenText: segments.join(" ").trim(),
-    hasUnmatchedQuote,
+    hasUnmatchedQuote: straightOpen || curlyOpen,
   };
 }
-
-/* =========================================================
-   AUTH
-========================================================= */
-
-async function authenticateUser(
-  request: NextRequest
-) {
-  const authorization =
-    request.headers.get("authorization");
-
-  if (
-    !authorization ||
-    !authorization.startsWith("Bearer ")
-  ) {
-    throw new Error(
-      "Missing authorization token."
-    );
-  }
-
-  const token = authorization
-    .slice("Bearer ".length)
-    .trim();
-
-  if (!token) {
-    throw new Error(
-      "Missing authorization token."
-    );
-  }
-
-  const {
-    data: { user },
-    error,
-  } = await supabaseAdmin.auth.getUser(token);
-
-  if (error || !user) {
-    console.error(
-      "Supabase authentication error:",
-      error
-    );
-
-    throw new Error(
-      "Invalid or expired authentication token."
-    );
-  }
-
-  return user;
-}
-
-/* =========================================================
-   CREDITS
-========================================================= */
-
-async function getUserCredits(
-  userId: string
-): Promise<number> {
-  const { data, error } =
-    await supabaseAdmin
-      .from("profiles")
-      .select("credits")
-      .eq("id", userId)
-      .single();
-
-  if (error) {
-    throw new Error(
-      `Unable to read credits: ${error.message}`
-    );
-  }
-
-  const credits = Number(
-    data?.credits ?? 0
-  );
-
-  if (!Number.isFinite(credits)) {
-    throw new Error(
-      "Invalid credits value."
-    );
-  }
-
-  return credits;
-}
-
-async function deductCredits(
-  userId: string,
-  cost: number,
-  currentCredits: number
-): Promise<number> {
-  if (currentCredits < cost) {
-    throw new Error(
-      `Not enough credits. You need ${cost} credits but only have ${currentCredits}.`
-    );
-  }
-
-  const newCredits =
-    currentCredits - cost;
-
-  const { data, error } =
-    await supabaseAdmin
-      .from("profiles")
-      .update({
-        credits: newCredits,
-      })
-      .eq("id", userId)
-      .eq("credits", currentCredits)
-      .select("credits")
-      .maybeSingle();
-
-  if (error) {
-    throw new Error(
-      `Unable to deduct credits: ${error.message}`
-    );
-  }
-
-  if (!data) {
-    throw new Error(
-      "Unable to deduct credits. Your balance may have changed. Please try again."
-    );
-  }
-
-  return Number(data.credits);
-}
-
-async function refundCredits(
-  userId: string,
-  amount: number
-): Promise<number | null> {
-  if (!amount || amount <= 0) {
-    return null;
-  }
-
-  try {
-    const currentCredits =
-      await getUserCredits(userId);
-
-    const newCredits =
-      currentCredits + amount;
-
-    const { data, error } =
-      await supabaseAdmin
-        .from("profiles")
-        .update({
-          credits: newCredits,
-        })
-        .eq("id", userId)
-        .select("credits")
-        .single();
-
-    if (error || !data) {
-      console.error(
-        "Credit refund failed:",
-        error
-      );
-
-      return null;
-    }
-
-    return Number(data.credits);
-  } catch (error) {
-    console.error(
-      "Credit refund exception:",
-      error
-    );
-
-    return null;
-  }
-}
-
-/* =========================================================
-   PROMPT
-========================================================= */
 
 function buildVeoPrompt(
   script: string,
   spokenText: string,
-  duration: Duration,
   hasAudio: boolean
-) {
-  const audioInstruction = hasAudio
-    ? `
-AUDIO AND DIALOGUE RULES:
+): string {
+  if (!hasAudio) {
+    return `
+Create the video described below.
 
-Generate natural synchronized audio.
+VISUAL / PERFORMANCE DIRECTION:
+${script}
 
-IMPORTANT:
-Only the text inside quotation marks is spoken dialogue.
-
-The quoted dialogue supplied separately below is the ONLY dialogue
-that should be spoken by the subject.
-
-Do NOT speak the visual instructions.
-Do NOT read the camera directions.
-Do NOT read descriptions outside quotation marks.
-Do NOT turn the entire SCRIPT into narration.
-
-SPOKEN DIALOGUE:
-"${spokenText}"
-
-The subject should speak the quoted dialogue naturally,
-with realistic timing, lip synchronization, facial expression,
-and appropriate emotion.
-
-Use subtle natural background ambience where appropriate.
-`
-    : `
-AUDIO:
-
-Do not generate spoken narration or dialogue.
-Keep the video silent.
-`;
+Do not add spoken dialogue unless the visual direction explicitly requires it.
+Use natural realistic motion, facial expressions, camera movement and cinematic presentation.
+`.trim();
+  }
 
   return `
-Create a polished cinematic vertical video using the supplied image as the first frame.
+Create a realistic cinematic video from the provided reference image.
 
-The script contains TWO different types of information:
+IMPORTANT DIALOGUE RULE:
+Words outside quotation marks are VISUAL / PERFORMANCE INSTRUCTIONS.
+Only the text inside quotation marks is SPOKEN DIALOGUE.
 
-1. VISUAL / PERFORMANCE INSTRUCTIONS
-   These are the words outside quotation marks.
-   Use them to control the subject's actions, expressions,
-   camera movement, environment, pacing, and visual storytelling.
+Do NOT read the visual instructions aloud.
+Do NOT invent additional dialogue.
+Do NOT paraphrase the dialogue.
 
-2. SPOKEN DIALOGUE
-   Only words inside quotation marks are spoken aloud.
-   Quotation marks may be straight ("...") or curly (“...”).
-   Do not speak anything outside the quotation marks.
-
-FULL SCRIPT:
+VISUAL / PERFORMANCE DIRECTION:
 ${script}
 
 EXTRACTED SPOKEN DIALOGUE:
-${spokenText || "(No spoken dialogue.)"}
+"${spokenText}"
 
-VIDEO:
-- Duration: ${duration} seconds.
-- Aspect ratio: 9:16 vertical.
-- Preserve the identity and appearance of the main subject.
-- Start from the supplied image.
-- Animate the subject naturally.
-- Follow the visual instructions in the FULL SCRIPT.
-- Use smooth cinematic camera movement.
-- Maintain strong visual consistency.
-- Do not unnecessarily change the scene.
-- Do not replace the main subject.
-- Avoid distorted faces.
-- Avoid extra fingers or limbs.
-- Avoid duplicate people.
-- Avoid warped objects.
-- Keep the result realistic and professional.
-- Make it suitable for social media.
-
-${audioInstruction}
+The person should naturally speak the extracted dialogue with accurate lip synchronization, realistic facial movement, natural expression and subtle gestures.
 `.trim();
 }
 
-/* =========================================================
-   STORAGE
-========================================================= */
+async function getUserFromRequest(request: NextRequest) {
+  const authorization = request.headers.get("authorization");
+
+  if (!authorization?.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const token = authorization.slice("Bearer ".length).trim();
+
+  if (!token) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+
+  if (error || !data.user) {
+    console.error("[VidForge] Auth error:", error);
+    return null;
+  }
+
+  return data.user;
+}
+
+async function getProfileCredits(userId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from("profiles")
+    .select("credits")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Could not read credits: ${error.message}`);
+  }
+
+  return Number(data?.credits ?? 0);
+}
+
+async function changeCredits(
+  userId: string,
+  amount: number
+): Promise<number> {
+  const current = await getProfileCredits(userId);
+  const next = current + amount;
+
+  if (next < 0) {
+    throw new Error("Insufficient credits.");
+  }
+
+  const { error } = await supabaseAdmin
+    .from("profiles")
+    .update({ credits: next })
+    .eq("id", userId);
+
+  if (error) {
+    throw new Error(`Could not update credits: ${error.message}`);
+  }
+
+  return next;
+}
+
+async function refundCredits(
+  userId: string,
+  amount: number,
+  reason: string
+): Promise<number | null> {
+  try {
+    console.log(
+      `[VidForge] REFUND ${amount} credits to ${userId}. Reason: ${reason}`
+    );
+
+    return await changeCredits(userId, amount);
+  } catch (error) {
+    console.error("[VidForge] Refund failed:", error);
+    return null;
+  }
+}
 
 async function uploadInputImage(
   userId: string,
@@ -447,1646 +253,761 @@ async function uploadInputImage(
 ): Promise<{
   path: string;
   publicUrl: string;
-  providerUrl: string;
+  signedUrl: string;
 }> {
-  const allowedTypes = [
-    "image/png",
-    "image/jpeg",
-    "image/jpg",
-    "image/webp",
-  ];
+  const extension =
+    image.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") ||
+    "jpg";
 
-  if (
-    !image.type ||
-    !allowedTypes.includes(image.type)
-  ) {
-    throw new Error(
-      `Unsupported image type: ${
-        image.type || "unknown"
-      }. Please use PNG, JPG, JPEG, or WebP.`
-    );
-  }
+  const safeExtension =
+    extension === "png" || extension === "webp" ? extension : "jpg";
 
-  const maxSize =
-    10 * 1024 * 1024;
+  const path = `generated-inputs/${userId}/${crypto.randomUUID()}.${safeExtension}`;
 
-  if (image.size <= 0) {
-    throw new Error(
-      "The uploaded image is empty."
-    );
-  }
+  const buffer = Buffer.from(await image.arrayBuffer());
 
-  if (image.size > maxSize) {
-    throw new Error(
-      "Image is too large. Maximum size is 10 MB."
-    );
-  }
-
-  let extension = "jpg";
-
-  if (image.type === "image/png") {
-    extension = "png";
-  }
-
-  if (image.type === "image/webp") {
-    extension = "webp";
-  }
-
-  const filePath =
-    `generated-inputs/${userId}/${crypto.randomUUID()}.${extension}`;
-
-  const arrayBuffer =
-    await image.arrayBuffer();
-
-  const buffer =
-    Buffer.from(arrayBuffer);
-
-  console.log(
-    "Uploading source image:",
-    {
-      bucket: STORAGE_BUCKET,
-      path: filePath,
-      size: buffer.length,
-      type: image.type,
-    }
-  );
-
-  const { error: uploadError } =
-    await supabaseAdmin.storage
-      .from(STORAGE_BUCKET)
-      .upload(
-        filePath,
-        buffer,
-        {
-          contentType: image.type,
-          cacheControl: "3600",
-          upsert: false,
-        }
-      );
+  const { error: uploadError } = await supabaseAdmin.storage
+    .from(BUCKET)
+    .upload(path, buffer, {
+      contentType: image.type || "image/jpeg",
+      upsert: false,
+    });
 
   if (uploadError) {
-    console.error(
-      "Supabase image upload failed:",
-      uploadError
-    );
-
-    throw new Error(
-      `Unable to upload image to Supabase: ${uploadError.message}`
-    );
+    throw new Error(`Image upload failed: ${uploadError.message}`);
   }
 
-  const {
-    data: publicData,
-  } =
-    supabaseAdmin.storage
-      .from(STORAGE_BUCKET)
-      .getPublicUrl(filePath);
+  const { data: publicData } = supabaseAdmin.storage
+    .from(BUCKET)
+    .getPublicUrl(path);
 
-  const publicUrl =
-    publicData?.publicUrl || "";
+  const publicUrl = publicData.publicUrl;
 
-  const {
-    data: signedData,
-    error: signedError,
-  } =
+  const { data: signedData, error: signedError } =
     await supabaseAdmin.storage
-      .from(STORAGE_BUCKET)
-      .createSignedUrl(
-        filePath,
-        60 * 60
-      );
+      .from(BUCKET)
+      .createSignedUrl(path, 60 * 60);
 
-  if (signedError) {
-    console.error(
-      "Could not create signed image URL:",
-      signedError
-    );
-
+  if (signedError || !signedData?.signedUrl) {
     throw new Error(
-      `Image uploaded, but a temporary image URL could not be created: ${signedError.message}`
+      `Could not create image URL for OpenRouter: ${
+        signedError?.message || "No signed URL returned"
+      }`
     );
   }
 
-  if (!signedData?.signedUrl) {
-    throw new Error(
-      "Image uploaded, but Supabase did not return a signed URL."
-    );
-  }
-
-  console.log(
-    "Source image uploaded successfully:",
-    filePath
-  );
+  console.log("[VidForge] Input image uploaded:", {
+    path,
+    publicUrl,
+    signedUrlCreated: true,
+  });
 
   return {
-    path: filePath,
+    path,
     publicUrl,
-    providerUrl:
-      signedData.signedUrl,
+    signedUrl: signedData.signedUrl,
   };
 }
 
-/* =========================================================
-   DATABASE
-========================================================= */
-
-async function createPendingVideoRecord(
-  params: {
-    userId: string;
-    prompt: string;
-    imageUrl: string;
-    duration: Duration;
-    cost: number;
-    hasAudio: boolean;
-  }
-) {
-  const {
-    userId,
-    prompt,
-    imageUrl,
-    duration,
-    cost,
-    hasAudio,
-  } = params;
-
-  const { data, error } =
-    await supabaseAdmin
-      .from("user_videos")
-      .insert({
-        user_id: userId,
-        prompt,
-        image_url: imageUrl,
-        video_url: "pending:submitting",
-        duration,
-        cost,
-        has_audio: hasAudio,
-      })
-      .select("id")
-      .single();
+async function createVideoRecord(params: {
+  userId: string;
+  prompt: string;
+  imageUrl: string;
+  duration: number;
+  cost: number;
+  hasAudio: boolean;
+}) {
+  const { data, error } = await supabaseAdmin
+    .from("user_videos")
+    .insert({
+      user_id: params.userId,
+      prompt: params.prompt,
+      image_url: params.imageUrl,
+      video_url: "pending:submitting",
+      duration: params.duration,
+      cost: params.cost,
+      has_audio: params.hasAudio,
+    })
+    .select("*")
+    .single();
 
   if (error || !data) {
     throw new Error(
-      error?.message ||
-        "Unable to create video record."
+      `Could not create video record: ${error?.message || "No row returned"}`
     );
   }
 
-  return String(data.id);
+  return data as VideoRow;
 }
 
-async function attachJobToVideoRecord(
+async function markVideoPendingJob(
   recordId: string,
   jobId: string
-) {
-  const { error } =
-    await supabaseAdmin
-      .from("user_videos")
-      .update({
-        video_url:
-          `pending:${jobId}`,
-      })
-      .eq("id", recordId);
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("user_videos")
+    .update({
+      video_url: `pending:${jobId}`,
+    })
+    .eq("id", recordId);
 
   if (error) {
-    throw new Error(
-      `Unable to attach video job: ${error.message}`
+    console.error(
+      "[VidForge] Could not attach OpenRouter job to database:",
+      error
     );
   }
 }
 
 async function markVideoFailed(
-  userId: string,
   recordId: string,
-  stage: string
-) {
-  const { error } =
-    await supabaseAdmin
-      .from("user_videos")
-      .update({
-        video_url:
-          `failed:${stage}:${Date.now()}`,
-      })
-      .eq("id", recordId)
-      .eq("user_id", userId);
+  message: string
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("user_videos")
+    .update({
+      video_url: `failed:${message.slice(0, 500)}`,
+    })
+    .eq("id", recordId);
 
   if (error) {
-    console.error(
-      "Unable to mark video failed:",
-      error
-    );
+    console.error("[VidForge] Could not mark video failed:", error);
   }
 }
 
-async function markVideoCompleted(
-  userId: string,
-  recordId: string,
-  videoUrl: string
-) {
-  const { error } =
-    await supabaseAdmin
-      .from("user_videos")
-      .update({
-        video_url: videoUrl,
-      })
-      .eq("id", recordId)
-      .eq("user_id", userId);
-
-  if (error) {
-    throw new Error(
-      `Unable to save video record: ${error.message}`
-    );
-  }
-}
-
-/* =========================================================
-   FIND JOB
-========================================================= */
-
-async function findUserJob(
+async function getVideoRecordByJob(
   userId: string,
   jobId: string
-): Promise<VideoJobRecord | null> {
-  const { data, error } =
-    await supabaseAdmin
-      .from("user_videos")
-      .select(
-        `
-        id,
-        user_id,
-        prompt,
-        image_url,
-        video_url,
-        duration,
-        cost,
-        has_audio
-        `
-      )
-      .eq("user_id", userId)
-      .eq(
-        "video_url",
-        `pending:${jobId}`
-      )
-      .maybeSingle();
+): Promise<VideoRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from("user_videos")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("video_url", `pending:${jobId}`)
+    .maybeSingle();
 
   if (error) {
-    throw new Error(
-      `Unable to find video job: ${error.message}`
-    );
+    console.error("[VidForge] Could not find job record:", error);
+    return null;
   }
 
-  return data as VideoJobRecord | null;
+  return data as VideoRow | null;
 }
 
-/* =========================================================
-   OPENROUTER
-========================================================= */
+async function saveGeneratedVideo(params: {
+  userId: string;
+  jobId: string;
+  videoBuffer: Buffer;
+}): Promise<string> {
+  const path = `generated-videos/${params.userId}/${params.jobId}.mp4`;
 
-function openRouterHeaders() {
-  return {
-    Authorization:
-      `Bearer ${OPENROUTER_API_KEY}`,
-    "Content-Type":
-      "application/json",
-    "HTTP-Referer":
-      process.env.NEXT_PUBLIC_SITE_URL ||
-      "https://vidforgeai.com.ng",
-    "X-Title":
-      "VidForge AI",
-  };
+  console.log("[VidForge] Saving generated MP4:", {
+    path,
+    bytes: params.videoBuffer.length,
+  });
+
+  const { error } = await supabaseAdmin.storage
+    .from(BUCKET)
+    .upload(path, params.videoBuffer, {
+      contentType: "video/mp4",
+      upsert: true,
+    });
+
+  if (error) {
+    throw new Error(`Generated video upload failed: ${error.message}`);
+  }
+
+  const { data } = supabaseAdmin.storage
+    .from(BUCKET)
+    .getPublicUrl(path);
+
+  if (!data?.publicUrl) {
+    throw new Error("Supabase did not return a public video URL.");
+  }
+
+  console.log("[VidForge] Generated MP4 saved:", data.publicUrl);
+
+  return data.publicUrl;
 }
 
-async function submitOpenRouterVideo(
-  params: {
-    prompt: string;
-    imageUrl: string;
-    duration: Duration;
-    hasAudio: boolean;
-  }
-) {
-  const {
-    prompt,
-    imageUrl,
-    duration,
-    hasAudio,
-  } = params;
+async function downloadOpenRouterVideo(
+  jobId: string,
+  unsignedUrl?: string
+): Promise<Buffer> {
+  /*
+   * IMPORTANT:
+   * OpenRouter's current video API returns an unsigned_urls entry
+   * pointing at its authenticated content endpoint.
+   *
+   * We deliberately send the OpenRouter API key here.
+   */
 
-  console.log(
-    "Submitting video to OpenRouter:",
-    {
-      model:
-        OPENROUTER_VIDEO_MODEL,
-      duration,
-      hasAudio,
-    }
-  );
+  const downloadUrl =
+    unsignedUrl ||
+    `${OPENROUTER_BASE}/videos/${encodeURIComponent(
+      jobId
+    )}/content?index=0`;
 
-  const response =
-    await fetch(
-      "https://openrouter.ai/api/v1/videos",
-      {
-        method: "POST",
-        headers:
-          openRouterHeaders(),
-        body: JSON.stringify({
-          model:
-            OPENROUTER_VIDEO_MODEL,
+  console.log("[VidForge] Downloading completed video:", {
+    jobId,
+    downloadUrl,
+  });
 
-          prompt,
+  const response = await fetch(downloadUrl, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+    },
+    cache: "no-store",
+  });
 
-          duration,
+  const contentType = response.headers.get("content-type") || "";
 
-          aspect_ratio:
-            "9:16",
-
-          generate_audio:
-            hasAudio,
-
-          frame_images: [
-            {
-              type: "image_url",
-              image_url: {
-                url: imageUrl,
-              },
-              frame_type:
-                "first_frame",
-            },
-          ],
-        }),
-      }
-    );
-
-  const rawText =
-    await response.text();
-
-  let data: any = null;
-
-  try {
-    data = rawText
-      ? JSON.parse(rawText)
-      : null;
-  } catch {
-    data = null;
-  }
-
-  console.log(
-    "OpenRouter response:",
-    {
-      status:
-        response.status,
-      ok:
-        response.ok,
-      body:
-        data ||
-        rawText.slice(0, 1000),
-    }
-  );
+  console.log("[VidForge] OpenRouter video download response:", {
+    jobId,
+    status: response.status,
+    ok: response.ok,
+    contentType,
+  });
 
   if (!response.ok) {
-    const message =
-      data?.error?.message ||
-      data?.error?.details ||
-      data?.message ||
-      rawText ||
-      `OpenRouter returned HTTP ${response.status}`;
+    const body = await response.text().catch(() => "");
 
     throw new Error(
-      `OpenRouter: ${message}`
+      `OpenRouter video download failed (${response.status}): ${body.slice(
+        0,
+        1000
+      )}`
     );
   }
 
-  const jobId =
-    data?.id ||
-    data?.job_id ||
-    data?.data?.id ||
-    data?.data?.job_id;
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  if (!buffer.length) {
+    throw new Error("OpenRouter returned an empty video file.");
+  }
 
   if (
-    !jobId ||
-    typeof jobId !== "string"
+    !contentType.toLowerCase().includes("video") &&
+    !contentType.toLowerCase().includes("octet-stream")
   ) {
-    throw new Error(
-      "OpenRouter accepted the request but did not return a video job ID."
+    console.warn(
+      "[VidForge] Unexpected OpenRouter video content type:",
+      contentType
     );
   }
 
-  return jobId;
+  console.log("[VidForge] MP4 downloaded successfully:", {
+    jobId,
+    bytes: buffer.length,
+    contentType,
+  });
+
+  return buffer;
 }
 
-async function getOpenRouterVideoJob(
-  jobId: string
-) {
-  const response =
-    await fetch(
-      `https://openrouter.ai/api/v1/videos/${encodeURIComponent(
-        jobId
-      )}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization:
-            `Bearer ${OPENROUTER_API_KEY}`,
-        },
-        cache: "no-store",
-      }
-    );
+async function getOpenRouterJob(jobId: string) {
+  const response = await fetch(
+    `${OPENROUTER_BASE}/videos/${encodeURIComponent(jobId)}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      },
+      cache: "no-store",
+    }
+  );
 
-  const rawText =
-    await response.text();
+  const raw = await response.text();
 
-  let data: any = null;
+  let data: any;
 
   try {
-    data = rawText
-      ? JSON.parse(rawText)
-      : null;
+    data = JSON.parse(raw);
   } catch {
-    data = null;
+    throw new Error(
+      `OpenRouter polling returned non-JSON (${response.status}): ${raw.slice(
+        0,
+        1000
+      )}`
+    );
   }
 
   if (!response.ok) {
-    const message =
-      data?.error?.message ||
-      data?.message ||
-      rawText ||
-      `OpenRouter polling failed with status ${response.status}`;
-
-    throw new Error(message);
+    throw new Error(
+      `OpenRouter polling failed (${response.status}): ${JSON.stringify(
+        data
+      ).slice(0, 1500)}`
+    );
   }
 
   return data;
 }
 
-/* =========================================================
-   PROVIDER STATUS
-========================================================= */
-
-function normalizeProviderStatus(
-  data: any
-): string {
-  const status =
-    data?.status ||
-    data?.data?.status ||
-    data?.state ||
-    data?.data?.state ||
-    "";
-
-  return String(status)
-    .toLowerCase()
-    .trim();
-}
-
-function extractUnsignedVideoUrl(
-  data: any
-): string | null {
-  const candidates = [
-    ...(Array.isArray(
-      data?.unsigned_urls
-    )
-      ? data.unsigned_urls
-      : []),
-
-    ...(Array.isArray(
-      data?.data?.unsigned_urls
-    )
-      ? data.data.unsigned_urls
-      : []),
-
-    data?.video_url,
-    data?.videoUrl,
-    data?.url,
-
-    data?.data?.video_url,
-    data?.data?.videoUrl,
-    data?.data?.url,
-  ];
-
-  for (
-    const candidate of candidates
-  ) {
-    if (
-      typeof candidate === "string" &&
-      candidate.startsWith("http")
-    ) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-/* =========================================================
-   DOWNLOAD VIDEO
-========================================================= */
-
-async function downloadOpenRouterVideo(
-  jobId: string,
-  data: any
-): Promise<Buffer> {
-  const unsignedUrl =
-    extractUnsignedVideoUrl(data);
-
-  if (unsignedUrl) {
-    console.log(
-      "Downloading generated video from unsigned URL."
-    );
-
-    const response =
-      await fetch(unsignedUrl);
-
-    if (!response.ok) {
-      throw new Error(
-        `Video download failed with HTTP ${response.status}.`
-      );
-    }
-
-    const arrayBuffer =
-      await response.arrayBuffer();
-
-    return Buffer.from(
-      arrayBuffer
-    );
-  }
-
-  console.log(
-    "No unsigned URL found. Using OpenRouter content endpoint."
-  );
-
-  const contentUrl =
-    `https://openrouter.ai/api/v1/videos/${encodeURIComponent(
-      jobId
-    )}/content?index=0`;
-
-  const response =
-    await fetch(
-      contentUrl,
-      {
-        method: "GET",
-        headers: {
-          Authorization:
-            `Bearer ${OPENROUTER_API_KEY}`,
-        },
-      }
-    );
-
-  if (!response.ok) {
-    const text =
-      await response.text();
-
-    throw new Error(
-      `OpenRouter video content retrieval failed: ${
-        text || response.status
-      }`
-    );
-  }
-
-  const arrayBuffer =
-    await response.arrayBuffer();
-
-  return Buffer.from(
-    arrayBuffer
-  );
-}
-
-/* =========================================================
-   SAVE GENERATED MP4
-========================================================= */
-
-async function saveGeneratedVideo(
-  userId: string,
-  jobId: string,
-  videoBuffer: Buffer
-): Promise<string> {
-  const filePath =
-    `generated-videos/${userId}/${jobId}.mp4`;
-
-  console.log(
-    "Saving generated MP4:",
-    {
-      bucket:
-        STORAGE_BUCKET,
-      path:
-        filePath,
-      bytes:
-        videoBuffer.length,
-    }
-  );
-
-  const { error } =
-    await supabaseAdmin.storage
-      .from(STORAGE_BUCKET)
-      .upload(
-        filePath,
-        videoBuffer,
-        {
-          contentType:
-            "video/mp4",
-          cacheControl:
-            "3600",
-          upsert: true,
-        }
-      );
-
-  if (error) {
-    throw new Error(
-      `Unable to save generated video to Supabase: ${error.message}`
-    );
-  }
-
-  const {
-    data: publicData,
-  } =
-    supabaseAdmin.storage
-      .from(STORAGE_BUCKET)
-      .getPublicUrl(filePath);
-
-  if (
-    !publicData?.publicUrl
-  ) {
-    throw new Error(
-      "Video was saved, but Supabase did not return a public video URL."
-    );
-  }
-
-  return publicData.publicUrl;
-}
-
-/* =========================================================
-   POST
-========================================================= */
-
-export async function POST(
-  request: NextRequest
-) {
-  let recordId:
-    | string
-    | null = null;
-
-  let userId:
-    | string
-    | null = null;
-
-  let chargedCredits = 0;
-
-  let creditsWereDeducted =
-    false;
+export async function POST(request: NextRequest) {
+  let recordId: string | null = null;
+  let userId: string | null = null;
+  let cost = 0;
 
   try {
-    /* -----------------------------------------------------
-       ENVIRONMENT CHECK
-    ----------------------------------------------------- */
+    console.log("[VidForge] ===== VIDEO GENERATION START =====");
 
     if (!OPENROUTER_API_KEY) {
-      return json(
-        {
-          error:
-            "OPENROUTER_API_KEY is not configured in Vercel.",
-        },
+      return jsonError("OPENROUTER_API_KEY is missing on the server.", 500);
+    }
+
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      return jsonError(
+        "Supabase server configuration is missing.",
         500
       );
     }
 
-    if (
-      !SUPABASE_URL ||
-      !SUPABASE_SERVICE_ROLE_KEY
-    ) {
-      return json(
-        {
-          error:
-            "Supabase server environment variables are not configured in Vercel.",
-        },
-        500
-      );
+    const user = await getUserFromRequest(request);
+
+    if (!user) {
+      return jsonError("Unauthorized.", 401);
     }
-
-    /* -----------------------------------------------------
-       AUTH
-    ----------------------------------------------------- */
-
-    const user =
-      await authenticateUser(
-        request
-      );
 
     userId = user.id;
 
-    /* -----------------------------------------------------
-       FORM DATA
-    ----------------------------------------------------- */
+    const formData = await request.formData();
 
-    const formData =
-      await request.formData();
+    const prompt = String(formData.get("prompt") || "").trim();
+    const suppliedSpokenText = String(
+      formData.get("spokenText") || ""
+    ).trim();
 
-    const scriptValue =
-      formData.get("script");
+    const image = formData.get("image");
+    const duration = Number(formData.get("duration") || 0);
+    const withAudio =
+      String(formData.get("withAudio") || "false") === "true";
 
-    const spokenTextValue =
-      formData.get("spokenText");
+    if (!prompt) {
+      return jsonError("Please enter a script.", 400);
+    }
 
-    const imageValue =
-      formData.get("image");
+    if (!(image instanceof File)) {
+      return jsonError("Please upload an image.", 400);
+    }
 
-    const durationValue =
-      formData.get("duration");
+    if (!PRICING[duration]) {
+      return jsonError("Duration must be 4, 6, or 8 seconds.", 400);
+    }
 
-    const audioValue =
-      formData.get("hasAudio");
+    if (image.size <= 0) {
+      return jsonError("The uploaded image is empty.", 400);
+    }
+
+    if (image.size > 10 * 1024 * 1024) {
+      return jsonError("Image must be 10MB or smaller.", 400);
+    }
+
+    const parsed = extractQuotedDialogue(prompt);
+
+    const spokenText =
+      suppliedSpokenText || parsed.spokenText;
+
+    if (withAudio && parsed.hasUnmatchedQuote) {
+      return jsonError(
+        "Your spoken dialogue has an unmatched quotation mark. Please close the quote around the words you want spoken.",
+        400
+      );
+    }
+
+    if (withAudio && !spokenText) {
+      return jsonError(
+        'For AI audio, put the words you want spoken inside quotation marks. Example: She says, "Hello from VidForge AI."',
+        400
+      );
+    }
+
+    cost = withAudio
+      ? PRICING[duration].audio
+      : PRICING[duration].silent;
+
+    const currentCredits = await getProfileCredits(userId);
+
+    if (currentCredits < cost) {
+      return jsonError(
+        `Not enough credits. You need ${cost} credits but have ${currentCredits}.`,
+        400
+      );
+    }
+
+    console.log("[VidForge] Request:", {
+      userId,
+      duration,
+      withAudio,
+      cost,
+      promptLength: prompt.length,
+      spokenText,
+      imageName: image.name,
+      imageSize: image.size,
+      model: MODEL,
+    });
+
+    const uploaded = await uploadInputImage(userId, image);
+
+    const videoRecord = await createVideoRecord({
+      userId,
+      prompt,
+      imageUrl: uploaded.publicUrl,
+      duration,
+      cost,
+      hasAudio: withAudio,
+    });
+
+    recordId = videoRecord.id;
+
+    /*
+     * IMPORTANT:
+     * We deduct credits immediately before submitting the provider job.
+     * If submission fails, we refund them.
+     */
+    const remainingCredits = await changeCredits(userId, -cost);
+
+    const veoPrompt = buildVeoPrompt(
+      prompt,
+      spokenText,
+      withAudio
+    );
+
+    const openRouterPayload = {
+      model: MODEL,
+      prompt: veoPrompt,
+      duration,
+      aspect_ratio: "9:16",
+      resolution: "720p",
+      generate_audio: withAudio,
+      frame_images: [
+        {
+          type: "image_url",
+          image_url: {
+            url: uploaded.signedUrl,
+          },
+          frame_type: "first_frame",
+        },
+      ],
+    };
 
     console.log(
-      "Generation request received:",
+      "[VidForge] Sending generation request to OpenRouter:",
+      JSON.stringify({
+        ...openRouterPayload,
+        frame_images: [
+          {
+            type: "image_url",
+            image_url: {
+              url: "[SIGNED IMAGE URL]",
+            },
+            frame_type: "first_frame",
+          },
+        ],
+      })
+    );
+
+    const submitResponse = await fetch(
+      `${OPENROUTER_BASE}/videos`,
       {
-        userId:
-          user.id,
-        hasScript:
-          typeof scriptValue ===
-          "string",
-        hasSpokenText:
-          typeof spokenTextValue ===
-          "string",
-        imageIsFile:
-          imageValue instanceof File,
-        imageType:
-          imageValue instanceof File
-            ? imageValue.type
-            : null,
-        imageSize:
-          imageValue instanceof File
-            ? imageValue.size
-            : null,
-        duration:
-          durationValue,
-        hasAudio:
-          audioValue,
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": SITE_URL,
+          "X-Title": "VidForge AI",
+        },
+        body: JSON.stringify(openRouterPayload),
+        cache: "no-store",
       }
     );
 
-    /* -----------------------------------------------------
-       VALIDATE SCRIPT
-    ----------------------------------------------------- */
+    const submitRaw = await submitResponse.text();
 
-    if (
-      typeof scriptValue !== "string" ||
-      !scriptValue.trim()
-    ) {
-      return json(
-        {
-          error:
-            "Please provide a script.",
-        },
-        400
-      );
-    }
-
-    /* -----------------------------------------------------
-       VALIDATE IMAGE
-    ----------------------------------------------------- */
-
-    if (
-      !(imageValue instanceof File)
-    ) {
-      return json(
-        {
-          error:
-            "Please upload an image. The image must be sent as a FormData file named 'image'.",
-        },
-        400
-      );
-    }
-
-    if (imageValue.size <= 0) {
-      return json(
-        {
-          error:
-            "The selected image is empty.",
-        },
-        400
-      );
-    }
-
-    /* -----------------------------------------------------
-       VALIDATE DURATION
-    ----------------------------------------------------- */
-
-    const parsedDuration =
-      Number(durationValue);
-
-    if (
-      parsedDuration !== 4 &&
-      parsedDuration !== 6 &&
-      parsedDuration !== 8
-    ) {
-      return json(
-        {
-          error:
-            "Duration must be 4, 6, or 8 seconds.",
-        },
-        400
-      );
-    }
-
-    const duration =
-      parsedDuration as Duration;
-
-    /* -----------------------------------------------------
-       AUDIO
-    ----------------------------------------------------- */
-
-    const hasAudio =
-      audioValue === "true" ||
-      audioValue === "1" ||
-      audioValue === "on";
-
-    const script =
-      scriptValue.trim();
-
-    /*
-     * The frontend now sends the extracted spoken text.
-     *
-     * If it is not supplied, the backend extracts it itself.
-     * This keeps the API backwards-compatible.
-     */
-    const extractedDialogue =
-      extractQuotedDialogue(
-        script
-      );
-
-    let spokenText =
-      extractedDialogue.spokenText;
-
-    if (
-      typeof spokenTextValue ===
-        "string" &&
-      spokenTextValue.trim()
-    ) {
-      spokenText =
-        spokenTextValue.trim();
-    }
-
-    console.log(
-      "Dialogue analysis:",
-      {
-        hasAudio,
-        spokenText,
-        spokenWordCount:
-          spokenText
-            ? spokenText
-                .split(/\s+/)
-                .filter(Boolean)
-                .length
-            : 0,
-        hasUnmatchedQuote:
-          extractedDialogue.hasUnmatchedQuote,
-      }
-    );
-
-    /*
-     * If audio is enabled, do not allow an empty spoken
-     * dialogue to accidentally turn the whole script into
-     * narration.
-     */
-    if (
-      hasAudio &&
-      !spokenText
-    ) {
-      return json(
-        {
-          error:
-            'No spoken dialogue was found. Put the words you want spoken inside quotation marks, for example: She smiles and says, "Believe in yourself."',
-          stage:
-            "dialogue_validation",
-        },
-        400
-      );
-    }
-
-    /*
-     * Do not silently accept broken quotation marks.
-     * This protects the intended dialogue behavior.
-     */
-    if (
-      hasAudio &&
-      extractedDialogue.hasUnmatchedQuote
-    ) {
-      return json(
-        {
-          error:
-            "Your quotation marks are not balanced. Please make sure every opening quote has a matching closing quote.",
-          stage:
-            "dialogue_validation",
-        },
-        400
-      );
-    }
-
-    const { cost } =
-      getPricing(
-        duration,
-        hasAudio
-      );
-
-    /* -----------------------------------------------------
-       CHECK CREDITS
-    ----------------------------------------------------- */
-
-    const currentCredits =
-      await getUserCredits(
-        user.id
-      );
-
-    if (
-      currentCredits < cost
-    ) {
-      return json(
-        {
-          error:
-            `Not enough credits. You need ${cost} credits but only have ${currentCredits}.`,
-          remainingCredits:
-            currentCredits,
-          requiredCredits:
-            cost,
-        },
-        402
-      );
-    }
-
-    /* -----------------------------------------------------
-       UPLOAD IMAGE
-    ----------------------------------------------------- */
-
-    const uploaded =
-      await uploadInputImage(
-        user.id,
-        imageValue
-      );
-
-    const imageUrlForDatabase =
-      uploaded.publicUrl ||
-      uploaded.providerUrl;
-
-    /* -----------------------------------------------------
-       CREATE DATABASE RECORD
-    ----------------------------------------------------- */
-
-    recordId =
-      await createPendingVideoRecord(
-        {
-          userId:
-            user.id,
-          prompt:
-            script,
-          imageUrl:
-            imageUrlForDatabase,
-          duration,
-          cost,
-          hasAudio,
-        }
-      );
-
-    /* -----------------------------------------------------
-       DEDUCT CREDITS
-    ----------------------------------------------------- */
-
-    const remainingCredits =
-      await deductCredits(
-        user.id,
-        cost,
-        currentCredits
-      );
-
-    chargedCredits =
-      cost;
-
-    creditsWereDeducted =
-      true;
-
-    /* -----------------------------------------------------
-       BUILD VEO PROMPT
-    ----------------------------------------------------- */
-
-    const veoPrompt =
-      buildVeoPrompt(
-        script,
-        spokenText,
-        duration,
-        hasAudio
-      );
-
-    console.log(
-      "Final Veo prompt prepared:",
-      {
-        duration,
-        hasAudio,
-        spokenText,
-      }
-    );
-
-    /* -----------------------------------------------------
-       SUBMIT TO OPENROUTER
-    ----------------------------------------------------- */
-
-    let jobId: string;
+    let submitData: any;
 
     try {
-      jobId =
-        await submitOpenRouterVideo(
-          {
-            prompt:
-              veoPrompt,
+      submitData = JSON.parse(submitRaw);
+    } catch {
+      submitData = {
+        raw: submitRaw,
+      };
+    }
 
-            imageUrl:
-              uploaded.providerUrl,
+    console.log("[VidForge] OpenRouter submission response:", {
+      status: submitResponse.status,
+      ok: submitResponse.ok,
+      data: submitData,
+    });
 
-            duration,
-
-            hasAudio,
-          }
-        );
-    } catch (error) {
-      console.error(
-        "VIDEO SUBMISSION FAILED:",
-        error
-      );
-
+    if (!submitResponse.ok) {
       if (recordId) {
         await markVideoFailed(
-          user.id,
           recordId,
-          "submission"
+          `OpenRouter submission failed: ${JSON.stringify(
+            submitData
+          )}`
         );
       }
 
-      if (
-        creditsWereDeducted
-      ) {
-        await refundCredits(
-          user.id,
-          chargedCredits
-        );
+      await refundCredits(
+        userId,
+        cost,
+        "OpenRouter submission rejected"
+      );
 
-        creditsWereDeducted =
-          false;
-      }
-
-      return json(
+      return NextResponse.json(
         {
           error:
-            errorMessage(error),
-          stage:
-            "openrouter_submission",
-          remainingCredits:
-            await getUserCredits(
-              user.id
-            ).catch(
-              () => null
-            ),
+            submitData?.error ||
+            submitData?.message ||
+            "OpenRouter rejected the video request.",
+          details: submitData,
         },
+        { status: submitResponse.status }
+      );
+    }
+
+    const jobId = String(submitData?.id || "").trim();
+
+    if (!jobId) {
+      if (recordId) {
+        await markVideoFailed(
+          recordId,
+          "OpenRouter accepted request but returned no job ID."
+        );
+      }
+
+      await refundCredits(
+        userId,
+        cost,
+        "OpenRouter returned no job ID"
+      );
+
+      return jsonError(
+        "OpenRouter accepted the request but returned no video job ID.",
         502
       );
     }
 
-    /* -----------------------------------------------------
-       ATTACH JOB
-    ----------------------------------------------------- */
-
     if (recordId) {
-      let attached = false;
-
-      /*
-       * Try twice because the provider job already exists.
-       * We do NOT refund if this database update fails.
-       */
-      for (
-        let attempt = 1;
-        attempt <= 2;
-        attempt++
-      ) {
-        try {
-          await attachJobToVideoRecord(
-            recordId,
-            jobId
-          );
-
-          attached = true;
-          break;
-        } catch (error) {
-          console.error(
-            `Could not attach job ID to database (attempt ${attempt}):`,
-            error
-          );
-
-          if (attempt === 1) {
-            await new Promise(
-              (resolve) =>
-                setTimeout(
-                  resolve,
-                  300
-                )
-            );
-          }
-        }
-      }
-
-      if (!attached) {
-        console.error(
-          "WARNING: OpenRouter job exists but database job attachment failed.",
-          {
-            recordId,
-            jobId,
-          }
-        );
-      }
+      await markVideoPendingJob(recordId, jobId);
     }
 
-    console.log(
-      "VIDEO JOB CREATED:",
-      jobId
-    );
-
-    return json({
-      success:
-        true,
+    console.log("[VidForge] OpenRouter JOB CREATED:", {
       jobId,
-      status:
-        "processing",
+      status: submitData?.status,
+      pollingUrl: submitData?.polling_url,
+    });
+
+    return NextResponse.json({
+      success: true,
+      jobId,
+      status: submitData?.status || "pending",
       remainingCredits,
-      duration,
-      hasAudio,
     });
   } catch (error) {
-    console.error(
-      "POST /api/generate-script-video FAILED:",
-      error
-    );
+    console.error("[VidForge] POST fatal error:", error);
 
-    /*
-     * Refund only when:
-     * - credits were deducted
-     * - a database record exists
-     * - no provider job was attached
-     */
-    if (
-      userId &&
-      recordId &&
-      creditsWereDeducted
-    ) {
-      try {
-        const { data } =
-          await supabaseAdmin
-            .from("user_videos")
-            .select(
-              "video_url"
-            )
-            .eq(
-              "id",
-              recordId
-            )
-            .eq(
-              "user_id",
-              userId
-            )
-            .maybeSingle();
-
-        const videoUrl =
-          data?.video_url;
-
-        if (
-          typeof videoUrl ===
-            "string" &&
-          videoUrl ===
-            "pending:submitting"
-        ) {
-          await markVideoFailed(
-            userId,
-            recordId,
-            "unexpected"
-          );
-
-          await refundCredits(
-            userId,
-            chargedCredits
-          );
-        }
-      } catch (
-        cleanupError
-      ) {
-        console.error(
-          "Emergency cleanup failed:",
-          cleanupError
-        );
-      }
+    if (recordId) {
+      await markVideoFailed(
+        recordId,
+        error instanceof Error
+          ? error.message
+          : "Unknown generation error"
+      );
     }
 
-    return json(
-      {
-        error:
-          errorMessage(error),
-        stage:
-          "post_generation_request",
-      },
+    if (userId && cost > 0) {
+      await refundCredits(
+        userId,
+        cost,
+        "Unexpected error before video job was established"
+      );
+    }
+
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Video generation failed.",
       500
     );
   }
 }
 
-/* =========================================================
-   GET
-   POLL VIDEO JOB
-========================================================= */
-
-export async function GET(
-  request: NextRequest
-) {
+export async function GET(request: NextRequest) {
   try {
+    console.log("[VidForge] ===== VIDEO STATUS CHECK =====");
+
     if (!OPENROUTER_API_KEY) {
-      return json(
-        {
-          error:
-            "OPENROUTER_API_KEY is not configured.",
-        },
-        500
-      );
+      return jsonError("OPENROUTER_API_KEY is missing.", 500);
     }
 
-    const user =
-      await authenticateUser(
-        request
-      );
+    const user = await getUserFromRequest(request);
 
-    const url =
-      new URL(request.url);
+    if (!user) {
+      return jsonError("Unauthorized.", 401);
+    }
 
-    const jobId =
-      url.searchParams.get(
-        "jobId"
-      );
-
-    const download =
-      url.searchParams.get(
-        "download"
-      ) === "true";
+    const { searchParams } = new URL(request.url);
+    const jobId = String(searchParams.get("jobId") || "").trim();
 
     if (!jobId) {
-      return json(
-        {
-          error:
-            "Missing jobId.",
-        },
-        400
-      );
+      return jsonError("Missing jobId.", 400);
     }
 
-    const userJob =
-      await findUserJob(
-        user.id,
-        jobId
-      );
+    const record = await getVideoRecordByJob(
+      user.id,
+      jobId
+    );
 
-    if (!userJob) {
-      return json(
-        {
-          error:
-            "Video job not found.",
-        },
+    if (!record) {
+      return jsonError(
+        "Video generation job was not found.",
         404
       );
     }
 
-    /* -----------------------------------------------------
-       POLL PROVIDER
-    ----------------------------------------------------- */
+    const job = await getOpenRouterJob(jobId);
 
-    let providerData: any;
+    const status = String(job?.status || "").toLowerCase();
 
-    try {
-      providerData =
-        await getOpenRouterVideoJob(
-          jobId
-        );
-    } catch (error) {
-      console.error(
-        "OpenRouter polling error:",
-        error
-      );
+    console.log("[VidForge] OpenRouter job status:", {
+      jobId,
+      status,
+      generationId: job?.generation_id,
+      error: job?.error,
+    });
 
-      return json({
-        status:
-          "processing",
+    if (
+      status === "pending" ||
+      status === "in_progress"
+    ) {
+      return NextResponse.json({
+        status,
         jobId,
-        message:
-          "Video is still processing.",
-        remainingCredits:
-          await getUserCredits(
-            user.id
-          ),
+        remainingCredits: await getProfileCredits(user.id),
       });
     }
 
-    const providerStatus =
-      normalizeProviderStatus(
-        providerData
+    if (
+      status === "failed" ||
+      status === "cancelled" ||
+      status === "expired"
+    ) {
+      const providerError =
+        typeof job?.error === "string"
+          ? job.error
+          : JSON.stringify(job?.error || "Unknown provider error");
+
+      await markVideoFailed(
+        record.id,
+        `OpenRouter ${status}: ${providerError}`
       );
 
-    console.log(
-      "VIDEO JOB STATUS:",
-      {
+      const remainingCredits = await refundCredits(
+        user.id,
+        Number(record.cost || 0),
+        `OpenRouter job ${status}`
+      );
+
+      return NextResponse.json({
+        status: "failed",
         jobId,
-        providerStatus,
-      }
+        error: providerError,
+        remainingCredits,
+      });
+    }
+
+    if (status !== "completed") {
+      return NextResponse.json({
+        status: status || "pending",
+        jobId,
+        remainingCredits: await getProfileCredits(user.id),
+      });
+    }
+
+    console.log("[VidForge] JOB COMPLETED. Retrieving MP4.", {
+      jobId,
+      unsignedUrls: job?.unsigned_urls,
+    });
+
+    const unsignedUrl =
+      Array.isArray(job?.unsigned_urls) &&
+      job.unsigned_urls.length > 0
+        ? job.unsigned_urls[0]
+        : undefined;
+
+    /*
+     * THIS IS THE CRITICAL FIX:
+     *
+     * Do not return OpenRouter's content URL to the browser.
+     * The server downloads the actual MP4 using the OpenRouter API key,
+     * then saves the MP4 into Supabase.
+     */
+    const videoBuffer = await downloadOpenRouterVideo(
+      jobId,
+      unsignedUrl
     );
 
-    /* -----------------------------------------------------
-       FAILED
-    ----------------------------------------------------- */
+    const savedVideoUrl = await saveGeneratedVideo({
+      userId: user.id,
+      jobId,
+      videoBuffer,
+    });
 
-    const failedStatuses = [
-      "failed",
-      "error",
-      "cancelled",
-      "canceled",
-      "expired",
-    ];
+    const { error: updateError } = await supabaseAdmin
+      .from("user_videos")
+      .update({
+        video_url: savedVideoUrl,
+      })
+      .eq("id", record.id);
 
-    if (
-      failedStatuses.includes(
-        providerStatus
-      )
-    ) {
-      const refundAmount =
-        Number(
-          userJob.cost || 0
-        );
-
-      if (
-        userJob.video_url?.startsWith(
-          "pending:"
-        )
-      ) {
-        await markVideoFailed(
-          user.id,
-          userJob.id,
-          providerStatus ||
-            "provider"
-        );
-
-        if (
-          refundAmount > 0
-        ) {
-          await refundCredits(
-            user.id,
-            refundAmount
-          );
-        }
-      }
-
-      return json({
-        status:
-          "failed",
-        error:
-          "The video provider could not generate this video. Your credits have been refunded.",
-        remainingCredits:
-          await getUserCredits(
-            user.id
-          ),
-      });
-    }
-
-    /* -----------------------------------------------------
-       COMPLETED?
-    ----------------------------------------------------- */
-
-    const completedStatuses = [
-      "completed",
-      "complete",
-      "succeeded",
-      "success",
-    ];
-
-    const providerVideoUrl =
-      extractUnsignedVideoUrl(
-        providerData
-      );
-
-    const isCompleted =
-      completedStatuses.includes(
-        providerStatus
-      ) ||
-      !!providerVideoUrl;
-
-    if (!isCompleted) {
-      return json({
-        status:
-          "processing",
-        jobId,
-        providerStatus:
-          providerStatus ||
-          "processing",
-        remainingCredits:
-          await getUserCredits(
-            user.id
-          ),
-      });
-    }
-
-    /* -----------------------------------------------------
-       DOWNLOAD MP4
-    ----------------------------------------------------- */
-
-    let videoBuffer: Buffer;
-
-    try {
-      videoBuffer =
-        await downloadOpenRouterVideo(
-          jobId,
-          providerData
-        );
-    } catch (error) {
-      console.error(
-        "VIDEO DOWNLOAD FAILED:",
-        error
-      );
-
-      if (
-        userJob.video_url?.startsWith(
-          "pending:"
-        )
-      ) {
-        await markVideoFailed(
-          user.id,
-          userJob.id,
-          "download"
-        );
-
-        await refundCredits(
-          user.id,
-          Number(
-            userJob.cost || 0
-          )
-        );
-      }
-
-      return json(
-        {
-          status:
-            "failed",
-          error:
-            "The video was generated but could not be retrieved. Your credits have been refunded.",
-          remainingCredits:
-            await getUserCredits(
-              user.id
-            ),
-        },
-        502
-      );
-    }
-
-    if (
-      !videoBuffer ||
-      videoBuffer.length === 0
-    ) {
-      await markVideoFailed(
-        user.id,
-        userJob.id,
-        "empty-video"
-      );
-
-      await refundCredits(
-        user.id,
-        Number(
-          userJob.cost || 0
-        )
-      );
-
-      return json(
-        {
-          status:
-            "failed",
-          error:
-            "The generated video file was empty. Your credits have been refunded.",
-          remainingCredits:
-            await getUserCredits(
-              user.id
-            ),
-        },
-        502
-      );
-    }
-
-    /* -----------------------------------------------------
-       SAVE MP4 TO SAME SUPABASE BUCKET
-    ----------------------------------------------------- */
-
-    let savedVideoUrl: string;
-
-    try {
-      savedVideoUrl =
-        await saveGeneratedVideo(
-          user.id,
-          jobId,
-          videoBuffer
-        );
-    } catch (error) {
-      console.error(
-        "VIDEO STORAGE FAILED:",
-        error
-      );
-
-      await markVideoFailed(
-        user.id,
-        userJob.id,
-        "storage"
-      );
-
-      await refundCredits(
-        user.id,
-        Number(
-          userJob.cost || 0
-        )
-      );
-
-      return json(
-        {
-          status:
-            "failed",
-          error:
-            "The video was generated but could not be saved to Supabase. Your credits have been refunded.",
-          remainingCredits:
-            await getUserCredits(
-              user.id
-            ),
-        },
-        500
-      );
-    }
-
-    /* -----------------------------------------------------
-       DATABASE COMPLETION
-    ----------------------------------------------------- */
-
-    try {
-      await markVideoCompleted(
-        user.id,
-        userJob.id,
-        savedVideoUrl
-      );
-    } catch (error) {
+    if (updateError) {
       /*
-       * DO NOT REFUND.
-       *
+       * IMPORTANT:
        * The MP4 already exists in Supabase.
+       * Therefore DO NOT refund the user here.
        */
       console.error(
-        "Video DB completion update failed:",
-        error
+        "[VidForge] MP4 saved but DB update failed:",
+        updateError
       );
+
+      return NextResponse.json({
+        status: "completed",
+        jobId,
+        videoUrl: savedVideoUrl,
+        remainingCredits: await getProfileCredits(user.id),
+        warning:
+          "Video was generated and saved, but the history database update failed.",
+      });
     }
 
-    console.log(
-      "VIDEO COMPLETED:",
-      {
-        jobId,
-        videoUrl:
-          savedVideoUrl,
-        bytes:
-          videoBuffer.length,
-      }
+    const remainingCredits = await getProfileCredits(
+      user.id
     );
 
-    /* -----------------------------------------------------
-       OPTIONAL DIRECT DOWNLOAD
-    ----------------------------------------------------- */
+    console.log("[VidForge] ===== VIDEO COMPLETE =====", {
+      jobId,
+      videoUrl: savedVideoUrl,
+      remainingCredits,
+    });
 
-    if (download) {
-      return NextResponse.redirect(
-        savedVideoUrl
-      );
-    }
-
-    /* -----------------------------------------------------
-       FINAL RESPONSE
-    ----------------------------------------------------- */
-
-    return json({
-      status:
-        "completed",
-      videoUrl:
-        savedVideoUrl,
-      remainingCredits:
-        await getUserCredits(
-          user.id
-        ),
+    return NextResponse.json({
+      status: "completed",
+      jobId,
+      videoUrl: savedVideoUrl,
+      remainingCredits,
     });
   } catch (error) {
-    console.error(
-      "GET /api/generate-script-video FAILED:",
-      error
-    );
+    console.error("[VidForge] GET fatal error:", error);
 
-    return json(
-      {
-        error:
-          errorMessage(error),
-        stage:
-          "video_polling",
-      },
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Could not retrieve generated video.",
       500
     );
   }

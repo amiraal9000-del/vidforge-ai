@@ -1365,7 +1365,7 @@ export default function GenerateScriptVideoPage() {
               <div className="h-2 w-2 rounded-full bg-purple-500" />
 
               <span className="text-sm font-medium text-purple-300">
-                VidForge AI
+                
               </span>
 
             </div>
@@ -1535,7 +1535,7 @@ export default function GenerateScriptVideoPage() {
 
                     <p className="mt-2 text-sm leading-6 text-white/50">
                       Use a clear photo of the person
-                      or character you want Veo to animate.
+                      or character you want  to animate.
                     </p>
 
                   </div>

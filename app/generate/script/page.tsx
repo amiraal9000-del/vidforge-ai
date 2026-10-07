@@ -40,6 +40,157 @@ function sleep(ms: number) {
   );
 }
 
+/*
+|--------------------------------------------------------------------------
+| SCRIPT / SPEECH HELPERS
+|--------------------------------------------------------------------------
+|
+| RULE:
+|
+| Text inside:
+|
+|   "spoken words"
+|
+| OR:
+|
+|   “spoken words”
+|
+| is treated as spoken dialogue.
+|
+| Everything outside quotation marks is treated
+| as visual / acting / camera direction.
+|
+*/
+
+function extractSpokenText(text: string): string {
+  if (!text.trim()) {
+    return "";
+  }
+
+  const spokenParts: string[] = [];
+
+  /*
+   * Supports both:
+   *
+   * "straight quotes"
+   *
+   * “curly quotes”
+   *
+   * Multiple quoted sections are supported.
+   */
+
+  const curlyMatches = text.matchAll(
+    /“([\s\S]*?)”/g
+  );
+
+  for (const match of curlyMatches) {
+    if (match[1]?.trim()) {
+      spokenParts.push(
+        match[1].trim()
+      );
+    }
+  }
+
+  /*
+   * Straight quotation marks.
+   *
+   * This intentionally ignores curly quotation
+   * sections because those were already extracted.
+   */
+
+  const straightMatches = text.matchAll(
+    /"([\s\S]*?)"/g
+  );
+
+  for (const match of straightMatches) {
+    if (match[1]?.trim()) {
+      spokenParts.push(
+        match[1].trim()
+      );
+    }
+  }
+
+  return spokenParts.join(" ").trim();
+}
+
+function countWords(text: string): number {
+  if (!text.trim()) {
+    return 0;
+  }
+
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .length;
+}
+
+function estimateSpeechSeconds(
+  spokenText: string
+): number {
+  const words =
+    countWords(spokenText);
+
+  if (words === 0) {
+    return 0;
+  }
+
+  /*
+   * Approximate natural speech:
+   * 150 words per minute.
+   */
+
+  return Math.ceil(
+    (words / 150) * 60
+  );
+}
+
+function hasUnmatchedQuotation(
+  text: string
+): boolean {
+  /*
+   * Count straight quotes.
+   */
+
+  const straightCount =
+    (text.match(/"/g) || []).length;
+
+  /*
+   * Count curly opening / closing quotes.
+   */
+
+  const openingCurlyCount =
+    (text.match(/“/g) || []).length;
+
+  const closingCurlyCount =
+    (text.match(/”/g) || []).length;
+
+  /*
+   * An odd number of straight quotation
+   * marks means something was opened but
+   * not closed.
+   */
+
+  if (
+    straightCount % 2 !== 0
+  ) {
+    return true;
+  }
+
+  /*
+   * Curly quotation marks must be balanced.
+   */
+
+  if (
+    openingCurlyCount !==
+    closingCurlyCount
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export default function GenerateScriptVideoPage() {
   const supabase = useMemo(
     () =>
@@ -56,7 +207,9 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] =
+    useState<any>(null);
+
   const [credits, setCredits] =
     useState<number | null>(null);
 
@@ -66,7 +219,8 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] =
+    useState("");
 
   const [image, setImage] =
     useState<File | null>(null);
@@ -130,9 +284,92 @@ export default function GenerateScriptVideoPage() {
 
   /*
   |--------------------------------------------------------------------------
-  | LOAD USER
+  | DERIVED SCRIPT DATA
   |--------------------------------------------------------------------------
   */
+
+  const spokenText =
+    useMemo(
+      () =>
+        extractSpokenText(
+          prompt
+        ),
+      [prompt]
+    );
+
+  const totalWordCount =
+    useMemo(
+      () =>
+        countWords(prompt),
+      [prompt]
+    );
+
+  const spokenWordCount =
+    useMemo(
+      () =>
+        countWords(
+          spokenText
+        ),
+      [spokenText]
+    );
+
+  const estimatedSeconds =
+    useMemo(
+      () =>
+        estimateSpeechSeconds(
+          spokenText
+        ),
+      [spokenText]
+    );
+
+  const unmatchedQuotation =
+    useMemo(
+      () =>
+        hasUnmatchedQuotation(
+          prompt
+        ),
+      [prompt]
+    );
+
+  /*
+  |--------------------------------------------------------------------------
+  | SCRIPT VALIDATION
+  |--------------------------------------------------------------------------
+  */
+
+  /*
+   * Speech is too long only when the
+   * actual quoted dialogue is too long.
+   */
+
+  const scriptTooLong =
+    withAudio &&
+    spokenWordCount > 0 &&
+    estimatedSeconds > duration;
+
+  /*
+   * If audio is ON, we require actual
+   * quoted speech.
+   */
+
+  const missingSpokenDialogue =
+    withAudio &&
+    prompt.trim().length > 0 &&
+    spokenWordCount === 0;
+
+  /*
+   * A quotation was opened but not closed.
+   */
+
+  const quotationError =
+    prompt.trim().length > 0 &&
+    unmatchedQuotation;
+
+  /*
+   |--------------------------------------------------------------------------
+   | LOAD USER
+   |--------------------------------------------------------------------------
+   */
 
   useEffect(() => {
     let mounted = true;
@@ -140,7 +377,8 @@ export default function GenerateScriptVideoPage() {
     const loadUser = async () => {
       const {
         data: { user },
-      } = await supabase.auth.getUser();
+      } =
+        await supabase.auth.getUser();
 
       if (!mounted) {
         return;
@@ -155,19 +393,25 @@ export default function GenerateScriptVideoPage() {
       const {
         data: profile,
         error,
-      } = await supabase
-        .from("profiles")
-        .select("credits")
-        .eq("id", user.id)
-        .single();
+      } =
+        await supabase
+          .from("profiles")
+          .select("credits")
+          .eq("id", user.id)
+          .single();
 
       if (!mounted) {
         return;
       }
 
-      if (!error && profile) {
+      if (
+        !error &&
+        profile
+      ) {
         setCredits(
-          Number(profile.credits ?? 0)
+          Number(
+            profile.credits ?? 0
+          )
         );
       }
     };
@@ -187,12 +431,15 @@ export default function GenerateScriptVideoPage() {
 
   useEffect(() => {
     return () => {
-      if (videoObjectUrlRef.current) {
+      if (
+        videoObjectUrlRef.current
+      ) {
         URL.revokeObjectURL(
           videoObjectUrlRef.current
         );
 
-        videoObjectUrlRef.current = null;
+        videoObjectUrlRef.current =
+          null;
       }
 
       if (imagePreview) {
@@ -216,7 +463,11 @@ export default function GenerateScriptVideoPage() {
       return;
     }
 
-    if (!file.type.startsWith("image/")) {
+    if (
+      !file.type.startsWith(
+        "image/"
+      )
+    ) {
       toast.error(
         "Please select a valid image."
       );
@@ -259,31 +510,6 @@ export default function GenerateScriptVideoPage() {
 
   /*
   |--------------------------------------------------------------------------
-  | SCRIPT LENGTH
-  |--------------------------------------------------------------------------
-  */
-
-  const wordCount =
-    prompt.trim()
-      ? prompt
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-          .length
-      : 0;
-
-  const estimatedSeconds =
-    wordCount > 0
-      ? Math.ceil(
-          (wordCount / 150) * 60
-        )
-      : 0;
-
-  const scriptTooLong =
-    estimatedSeconds > duration;
-
-  /*
-  |--------------------------------------------------------------------------
   | ACCESS TOKEN
   |--------------------------------------------------------------------------
   */
@@ -291,12 +517,47 @@ export default function GenerateScriptVideoPage() {
   const getAccessToken = async () => {
     const {
       data: { session },
-    } = await supabase.auth.getSession();
+    } =
+      await supabase.auth.getSession();
 
     return (
-      session?.access_token ?? null
+      session?.access_token ??
+      null
     );
   };
+
+  /*
+  |--------------------------------------------------------------------------
+  | SCRIPT VALIDATION MESSAGE
+  |--------------------------------------------------------------------------
+  */
+
+  const getScriptValidationMessage =
+    () => {
+      if (
+        quotationError
+      ) {
+        return "Your quotation marks are not balanced. Close the spoken dialogue with a quotation mark.";
+      }
+
+      if (
+        withAudio &&
+        missingSpokenDialogue
+      ) {
+        return 'AI audio is ON. Put the words you want spoken inside quotation marks, for example: “Believe in yourself.”';
+      }
+
+      if (
+        scriptTooLong
+      ) {
+        return `The spoken dialogue is too long for a ${duration}-second video. Shorten the words inside the quotation marks or choose a longer duration.`;
+      }
+
+      return "";
+    };
+
+  const scriptValidationMessage =
+    getScriptValidationMessage();
 
   /*
   |--------------------------------------------------------------------------
@@ -326,9 +587,28 @@ export default function GenerateScriptVideoPage() {
       return;
     }
 
+    if (
+      quotationError
+    ) {
+      toast.error(
+        "Please close your quotation marks before continuing."
+      );
+      return;
+    }
+
+    if (
+      withAudio &&
+      missingSpokenDialogue
+    ) {
+      toast.error(
+        "AI audio is ON. Put the words you want spoken inside quotation marks."
+      );
+      return;
+    }
+
     if (scriptTooLong) {
       toast.error(
-        `Your script is too long for a ${duration}-second video.`
+        `The spoken dialogue is too long for a ${duration}-second video.`
       );
       return;
     }
@@ -352,48 +632,513 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const startGeneration = async () => {
-    if (!user) {
-      toast.error(
-        "Please sign in before generating."
-      );
-      return;
-    }
+  const startGeneration =
+    async () => {
+      if (!user) {
+        toast.error(
+          "Please sign in before generating."
+        );
+        return;
+      }
 
-    if (!image) {
-      toast.error(
-        "Please upload a photo."
-      );
-      return;
-    }
+      if (!image) {
+        toast.error(
+          "Please upload a photo."
+        );
+        return;
+      }
 
-    if (!prompt.trim()) {
-      toast.error(
-        "Please enter your script."
-      );
-      return;
-    }
+      if (!prompt.trim()) {
+        toast.error(
+          "Please enter your script."
+        );
+        return;
+      }
 
-    if (scriptTooLong) {
-      toast.error(
-        `Your script is too long for a ${duration}-second video.`
-      );
-      return;
-    }
+      if (
+        quotationError
+      ) {
+        toast.error(
+          "Please close your quotation marks before generating."
+        );
+        return;
+      }
 
-    const token =
-      await getAccessToken();
+      if (
+        withAudio &&
+        missingSpokenDialogue
+      ) {
+        toast.error(
+          "AI audio is ON. Put the words you want spoken inside quotation marks."
+        );
+        return;
+      }
 
-    if (!token) {
-      toast.error(
-        "Your session has expired."
-      );
-      return;
-    }
+      if (scriptTooLong) {
+        toast.error(
+          `The spoken dialogue is too long for a ${duration}-second video.`
+        );
+        return;
+      }
 
-    try {
+      const token =
+        await getAccessToken();
+
+      if (!token) {
+        toast.error(
+          "Your session has expired."
+        );
+        return;
+      }
+
+      try {
+        /*
+         * Reset only the previous preview.
+         */
+
+        if (
+          videoObjectUrlRef.current
+        ) {
+          URL.revokeObjectURL(
+            videoObjectUrlRef.current
+          );
+
+          videoObjectUrlRef.current =
+            null;
+        }
+
+        setVideoUrl(null);
+        setVideoReady(false);
+        setVideoError(false);
+
+        setGenerating(true);
+        setShowReview(false);
+        setJobId(null);
+
+        setGenerationStatus(
+          "Preparing your video..."
+        );
+
+        /*
+         * Build multipart request.
+         */
+
+        const formData =
+          new FormData();
+
+        /*
+         * FULL SCRIPT
+         *
+         * This contains:
+         * - scene direction
+         * - camera direction
+         * - acting direction
+         * - spoken dialogue
+         */
+
+        formData.append(
+          "prompt",
+          prompt.trim()
+        );
+
+        /*
+         * SPOKEN TEXT
+         *
+         * This contains ONLY the
+         * content inside quotation marks.
+         */
+
+        formData.append(
+          "spokenText",
+          spokenText
+        );
+
+        formData.append(
+          "image",
+          image
+        );
+
+        formData.append(
+          "duration",
+          String(duration)
+        );
+
+        formData.append(
+          "withAudio",
+          String(withAudio)
+        );
+
+        setGenerationStatus(
+          "Sending your idea to Veo..."
+        );
+
+        const response =
+          await fetch(
+            "/api/generate-script-video",
+            {
+              method: "POST",
+
+              headers: {
+                Authorization:
+                  `Bearer ${token}`,
+              },
+
+              body: formData,
+
+              cache: "no-store",
+            }
+          );
+
+        const data =
+          await response
+            .json()
+            .catch(
+              () => null
+            );
+
+        if (!response.ok) {
+          throw new Error(
+            data?.error ||
+              "Unable to start video generation."
+          );
+        }
+
+        if (!data?.jobId) {
+          throw new Error(
+            "No video generation job was returned."
+          );
+        }
+
+        /*
+         * Provider job successfully started.
+         */
+
+        setJobId(
+          data.jobId
+        );
+
+        if (
+          typeof data.remainingCredits ===
+          "number"
+        ) {
+          setCredits(
+            data.remainingCredits
+          );
+        }
+
+        setGenerationStatus(
+          "Veo is creating your video..."
+        );
+
+        /*
+         * Wait for actual completed video.
+         */
+
+        await pollForVideo(
+          data.jobId
+        );
+      } catch (error: any) {
+        console.error(
+          "Generation error:",
+          error
+        );
+
+        toast.error(
+          error?.message ||
+            "Something went wrong while generating your video."
+        );
+
+        setGenerationStatus(
+          ""
+        );
+
+        setGenerating(
+          false
+        );
+      }
+    };
+
+  /*
+  |--------------------------------------------------------------------------
+  | POLL VIDEO
+  |--------------------------------------------------------------------------
+  */
+
+  const pollForVideo =
+    async (
+      currentJobId: string
+    ) => {
       /*
-       * Reset only the previous preview.
+       * 72 attempts × 5 seconds = 6 minutes.
+       */
+
+      const maxAttempts = 72;
+
+      for (
+        let attempt = 0;
+        attempt <
+        maxAttempts;
+        attempt++
+      ) {
+        const token =
+          await getAccessToken();
+
+        if (!token) {
+          throw new Error(
+            "Your session has expired."
+          );
+        }
+
+        const response =
+          await fetch(
+            `/api/generate-script-video?jobId=${encodeURIComponent(
+              currentJobId
+            )}`,
+            {
+              method: "GET",
+
+              headers: {
+                Authorization:
+                  `Bearer ${token}`,
+              },
+
+              cache: "no-store",
+            }
+          );
+
+        const data =
+          await response
+            .json()
+            .catch(
+              () => null
+            );
+
+        if (!response.ok) {
+          throw new Error(
+            data?.error ||
+              "Unable to check video status."
+          );
+        }
+
+        /*
+         * Keep credit balance synchronized.
+         */
+
+        if (
+          typeof data?.remainingCredits ===
+          "number"
+        ) {
+          setCredits(
+            data.remainingCredits
+          );
+        }
+
+        /*
+         * FAILED
+         */
+
+        if (
+          data?.status ===
+            "failed" ||
+          data?.status ===
+            "cancelled" ||
+          data?.status ===
+            "expired"
+        ) {
+          throw new Error(
+            data?.error ||
+              `Video generation ${data.status}.`
+          );
+        }
+
+        /*
+         * COMPLETED
+         */
+
+        if (
+          data?.status ===
+          "completed"
+        ) {
+          if (!data.videoUrl) {
+            throw new Error(
+              "Veo completed the video, but no video URL was returned."
+            );
+          }
+
+          setGenerationStatus(
+            "Your video has been created!"
+          );
+
+          /*
+           * Retrieve actual MP4.
+           */
+
+          await downloadVideo(
+            data.videoUrl
+          );
+
+          /*
+           * Keep finished video on screen.
+           */
+
+          setGenerationStatus(
+            "Your video is ready."
+          );
+
+          setGenerating(
+            false
+          );
+
+          toast.success(
+            "Your AI video is ready!"
+          );
+
+          return;
+        }
+
+        /*
+         * PROCESSING
+         */
+
+        if (
+          data?.status ===
+          "pending"
+        ) {
+          setGenerationStatus(
+            "Your video is queued..."
+          );
+        } else if (
+          data?.status ===
+          "in_progress"
+        ) {
+          setGenerationStatus(
+            "Veo is generating your video..."
+          );
+        } else {
+          setGenerationStatus(
+            "Generating your video..."
+          );
+        }
+
+        await sleep(5000);
+      }
+
+      throw new Error(
+        "Video generation is taking longer than expected. Please try again."
+      );
+    };
+
+  /*
+  |--------------------------------------------------------------------------
+  | DOWNLOAD FINISHED VIDEO
+  |--------------------------------------------------------------------------
+  */
+
+  const downloadVideo =
+    async (
+      protectedVideoUrl: string
+    ) => {
+      const token =
+        await getAccessToken();
+
+      if (!token) {
+        throw new Error(
+          "Your session has expired."
+        );
+      }
+
+      setGenerationStatus(
+        "Preparing your finished video..."
+      );
+
+      const response =
+        await fetch(
+          protectedVideoUrl,
+          {
+            method: "GET",
+
+            headers: {
+              Authorization:
+                `Bearer ${token}`,
+            },
+
+            cache: "no-store",
+          }
+        );
+
+      if (!response.ok) {
+        let errorMessage =
+          "Unable to retrieve the generated video.";
+
+        const contentType =
+          response.headers.get(
+            "content-type"
+          ) || "";
+
+        if (
+          contentType.includes(
+            "application/json"
+          )
+        ) {
+          const data =
+            await response
+              .json()
+              .catch(
+                () => null
+              );
+
+          if (data?.error) {
+            errorMessage =
+              data.error;
+          }
+        } else {
+          const text =
+            await response
+              .text()
+              .catch(
+                () => ""
+              );
+
+          if (text) {
+            errorMessage =
+              text;
+          }
+        }
+
+        throw new Error(
+          errorMessage
+        );
+      }
+
+      /*
+       * Convert MP4 response into
+       * browser object URL.
+       */
+
+      const blob =
+        await response.blob();
+
+      if (!blob.size) {
+        throw new Error(
+          "The generated video file is empty."
+        );
+      }
+
+      if (
+        !blob.type.startsWith(
+          "video/"
+        ) &&
+        blob.type !==
+          "application/octet-stream"
+      ) {
+        console.warn(
+          "Unexpected generated video content type:",
+          blob.type
+        );
+      }
+
+      /*
+       * Remove previous object URL.
        */
 
       if (
@@ -407,470 +1152,69 @@ export default function GenerateScriptVideoPage() {
           null;
       }
 
-      setVideoUrl(null);
-      setVideoReady(false);
-      setVideoError(false);
-
-      setGenerating(true);
-      setShowReview(false);
-      setJobId(null);
-
-      setGenerationStatus(
-        "Preparing your video..."
-      );
-
       /*
-       * Build multipart request.
+       * Create local browser URL.
        */
 
-      const formData =
-        new FormData();
-
-      formData.append(
-        "prompt",
-        prompt.trim()
-      );
-
-      formData.append(
-        "image",
-        image
-      );
-
-      formData.append(
-        "duration",
-        String(duration)
-      );
-
-      formData.append(
-        "withAudio",
-        String(withAudio)
-      );
-
-      setGenerationStatus(
-        "Sending your idea to Veo..."
-      );
-
-      const response =
-        await fetch(
-          "/api/generate-script-video",
-          {
-            method: "POST",
-
-            headers: {
-              Authorization:
-                `Bearer ${token}`,
-            },
-
-            body: formData,
-
-            cache: "no-store",
-          }
+      const objectUrl =
+        URL.createObjectURL(
+          blob
         );
-
-      const data =
-        await response
-          .json()
-          .catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            "Unable to start video generation."
-        );
-      }
-
-      if (!data?.jobId) {
-        throw new Error(
-          "No video generation job was returned."
-        );
-      }
-
-      /*
-       * Provider job successfully started.
-       */
-
-      setJobId(data.jobId);
-
-      if (
-        typeof data.remainingCredits ===
-        "number"
-      ) {
-        setCredits(
-          data.remainingCredits
-        );
-      }
-
-      setGenerationStatus(
-        "Veo is creating your video..."
-      );
-
-      /*
-       * Wait for the actual completed video.
-       */
-
-      await pollForVideo(
-        data.jobId
-      );
-    } catch (error: any) {
-      console.error(
-        "Generation error:",
-        error
-      );
-
-      toast.error(
-        error?.message ||
-          "Something went wrong while generating your video."
-      );
-
-      setGenerationStatus("");
-      setGenerating(false);
-    }
-  };
-
-  /*
-  |--------------------------------------------------------------------------
-  | POLL VIDEO
-  |--------------------------------------------------------------------------
-  */
-
-  const pollForVideo = async (
-    currentJobId: string
-  ) => {
-    /*
-     * 72 attempts × 5 seconds = 6 minutes.
-     */
-
-    const maxAttempts = 72;
-
-    for (
-      let attempt = 0;
-      attempt < maxAttempts;
-      attempt++
-    ) {
-      const token =
-        await getAccessToken();
-
-      if (!token) {
-        throw new Error(
-          "Your session has expired."
-        );
-      }
-
-      const response =
-        await fetch(
-          `/api/generate-script-video?jobId=${encodeURIComponent(
-            currentJobId
-          )}`,
-          {
-            method: "GET",
-
-            headers: {
-              Authorization:
-                `Bearer ${token}`,
-            },
-
-            cache: "no-store",
-          }
-        );
-
-      const data =
-        await response
-          .json()
-          .catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            "Unable to check video status."
-        );
-      }
-
-      /*
-       * Keep the displayed credit balance
-       * synchronized with the server.
-       */
-
-      if (
-        typeof data?.remainingCredits ===
-        "number"
-      ) {
-        setCredits(
-          data.remainingCredits
-        );
-      }
-
-      /*
-       * FAILED
-       */
-
-      if (
-        data?.status === "failed" ||
-        data?.status === "cancelled" ||
-        data?.status === "expired"
-      ) {
-        throw new Error(
-          data?.error ||
-            `Video generation ${data.status}.`
-        );
-      }
-
-      /*
-       * COMPLETED
-       */
-
-      if (
-        data?.status ===
-        "completed"
-      ) {
-        if (!data.videoUrl) {
-          throw new Error(
-            "Veo completed the video, but no video URL was returned."
-          );
-        }
-
-        setGenerationStatus(
-          "Your video has been created!"
-        );
-
-        /*
-         * Retrieve the actual MP4.
-         */
-
-        await downloadVideo(
-          data.videoUrl
-        );
-
-        /*
-         * IMPORTANT:
-         *
-         * Do NOT reset the generator.
-         * Do NOT clear the form.
-         * Do NOT send the user back.
-         *
-         * The finished video remains on screen.
-         */
-
-        setGenerationStatus(
-          "Your video is ready."
-        );
-
-        setGenerating(false);
-
-        toast.success(
-          "Your AI video is ready!"
-        );
-
-        return;
-      }
-
-      /*
-       * PROCESSING STATUS
-       */
-
-      if (
-        data?.status ===
-        "pending"
-      ) {
-        setGenerationStatus(
-          "Your video is queued..."
-        );
-      } else if (
-        data?.status ===
-        "in_progress"
-      ) {
-        setGenerationStatus(
-          "Veo is generating your video..."
-        );
-      } else {
-        setGenerationStatus(
-          "Generating your video..."
-        );
-      }
-
-      await sleep(5000);
-    }
-
-    throw new Error(
-      "Video generation is taking longer than expected. Please try again."
-    );
-  };
-
-  /*
-  |--------------------------------------------------------------------------
-  | DOWNLOAD FINISHED VIDEO
-  |--------------------------------------------------------------------------
-  */
-
-  const downloadVideo = async (
-    protectedVideoUrl: string
-  ) => {
-    const token =
-      await getAccessToken();
-
-    if (!token) {
-      throw new Error(
-        "Your session has expired."
-      );
-    }
-
-    setGenerationStatus(
-      "Preparing your finished video..."
-    );
-
-    const response =
-      await fetch(
-        protectedVideoUrl,
-        {
-          method: "GET",
-
-          headers: {
-            Authorization:
-              `Bearer ${token}`,
-          },
-
-          cache: "no-store",
-        }
-      );
-
-    if (!response.ok) {
-      let errorMessage =
-        "Unable to retrieve the generated video.";
-
-      const contentType =
-        response.headers.get(
-          "content-type"
-        ) || "";
-
-      if (
-        contentType.includes(
-          "application/json"
-        )
-      ) {
-        const data =
-          await response
-            .json()
-            .catch(() => null);
-
-        if (data?.error) {
-          errorMessage =
-            data.error;
-        }
-      } else {
-        const text =
-          await response
-            .text()
-            .catch(() => "");
-
-        if (text) {
-          errorMessage = text;
-        }
-      }
-
-      throw new Error(
-        errorMessage
-      );
-    }
-
-    /*
-     * Convert MP4 response into a browser
-     * object URL.
-     */
-
-    const blob =
-      await response.blob();
-
-    if (!blob.size) {
-      throw new Error(
-        "The generated video file is empty."
-      );
-    }
-
-    /*
-     * Confirm that we actually received
-     * something that looks like video.
-     */
-
-    if (
-      !blob.type.startsWith(
-        "video/"
-      ) &&
-      blob.type !==
-        "application/octet-stream"
-    ) {
-      console.warn(
-        "Unexpected generated video content type:",
-        blob.type
-      );
-    }
-
-    /*
-     * Remove previous object URL.
-     */
-
-    if (
-      videoObjectUrlRef.current
-    ) {
-      URL.revokeObjectURL(
-        videoObjectUrlRef.current
-      );
 
       videoObjectUrlRef.current =
-        null;
-    }
+        objectUrl;
 
-    /*
-     * Create local browser URL.
-     */
+      setVideoError(
+        false
+      );
 
-    const objectUrl =
-      URL.createObjectURL(blob);
+      setVideoReady(
+        false
+      );
 
-    videoObjectUrlRef.current =
-      objectUrl;
+      setVideoUrl(
+        objectUrl
+      );
 
-    setVideoError(false);
-    setVideoReady(false);
-    setVideoUrl(objectUrl);
+      /*
+       * Give React time to mount video.
+       */
 
-    /*
-     * Give React time to mount the
-     * <video> element.
-     */
+      await new Promise<void>(
+        (resolve) => {
+          requestAnimationFrame(
+            () => {
+              resolve();
+            }
+          );
+        }
+      );
 
-    await new Promise<void>(
-      (resolve) => {
-        requestAnimationFrame(() => {
-          resolve();
-        });
+      /*
+       * Try immediate playback.
+       */
+
+      if (
+        videoRef.current
+      ) {
+        try {
+          videoRef.current.load();
+
+          await videoRef.current
+            .play()
+            .catch(() => {
+              /*
+               * Browser may block autoplay.
+               * This is not generation failure.
+               */
+            });
+        } catch {
+          /*
+           * Ignore autoplay restrictions.
+           */
+        }
       }
-    );
-
-    /*
-     * Try to load/play immediately.
-     */
-
-    if (videoRef.current) {
-      try {
-        videoRef.current.load();
-
-        await videoRef.current
-          .play()
-          .catch(() => {
-            /*
-             * Browser may block autoplay.
-             *
-             * This is NOT a generation failure.
-             * The video remains visible with
-             * the normal play button.
-             */
-          });
-      } catch {
-        /*
-         * Ignore autoplay restrictions.
-         */
-      }
-    }
-  };
+    };
 
   /*
   |--------------------------------------------------------------------------
@@ -878,10 +1222,16 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const handleVideoReady = () => {
-    setVideoReady(true);
-    setVideoError(false);
-  };
+  const handleVideoReady =
+    () => {
+      setVideoReady(
+        true
+      );
+
+      setVideoError(
+        false
+      );
+    };
 
   /*
   |--------------------------------------------------------------------------
@@ -889,14 +1239,20 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const handleVideoError = () => {
-    setVideoError(true);
-    setVideoReady(false);
+  const handleVideoError =
+    () => {
+      setVideoError(
+        true
+      );
 
-    console.error(
-      "The browser could not play the generated video."
-    );
-  };
+      setVideoReady(
+        false
+      );
+
+      console.error(
+        "The browser could not play the generated video."
+      );
+    };
 
   /*
   |--------------------------------------------------------------------------
@@ -904,46 +1260,76 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const startNewVideo = () => {
-    if (
-      videoObjectUrlRef.current
-    ) {
-      URL.revokeObjectURL(
+  const startNewVideo =
+    () => {
+      if (
         videoObjectUrlRef.current
+      ) {
+        URL.revokeObjectURL(
+          videoObjectUrlRef.current
+        );
+
+        videoObjectUrlRef.current =
+          null;
+      }
+
+      if (imagePreview) {
+        URL.revokeObjectURL(
+          imagePreview
+        );
+      }
+
+      setVideoUrl(
+        null
       );
 
-      videoObjectUrlRef.current =
-        null;
-    }
-
-    if (imagePreview) {
-      URL.revokeObjectURL(
-        imagePreview
+      setVideoReady(
+        false
       );
-    }
 
-    setVideoUrl(null);
-    setVideoReady(false);
-    setVideoError(false);
+      setVideoError(
+        false
+      );
 
-    setJobId(null);
-    setGenerationStatus("");
-    setGenerating(false);
-    setShowReview(false);
+      setJobId(
+        null
+      );
 
-    setPrompt("");
-    setImage(null);
-    setImagePreview(null);
+      setGenerationStatus(
+        ""
+      );
 
-    /*
-     * Allow selecting the same file again.
-     */
+      setGenerating(
+        false
+      );
 
-    if (fileInputRef.current) {
-      fileInputRef.current.value =
-        "";
-    }
-  };
+      setShowReview(
+        false
+      );
+
+      setPrompt(
+        ""
+      );
+
+      setImage(
+        null
+      );
+
+      setImagePreview(
+        null
+      );
+
+      /*
+       * Allow selecting same file again.
+       */
+
+      if (
+        fileInputRef.current
+      ) {
+        fileInputRef.current.value =
+          "";
+      }
+    };
 
   /*
   |--------------------------------------------------------------------------
@@ -1006,8 +1392,6 @@ export default function GenerateScriptVideoPage() {
 
               <div className="p-5 sm:p-7">
 
-                {/* SUCCESS HEADER */}
-
                 <div className="mb-6 text-center">
 
                   <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-green-500/10">
@@ -1030,15 +1414,17 @@ export default function GenerateScriptVideoPage() {
 
                 </div>
 
-                {/* VIDEO */}
-
                 <div className="mx-auto w-full max-w-md">
 
                   <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
 
                     <video
-                      ref={videoRef}
-                      src={videoUrl}
+                      ref={
+                        videoRef
+                      }
+                      src={
+                        videoUrl
+                      }
                       controls
                       autoPlay
                       playsInline
@@ -1075,8 +1461,6 @@ export default function GenerateScriptVideoPage() {
 
                   </div>
 
-                  {/* PLAYBACK ERROR */}
-
                   {videoError && (
 
                     <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-center">
@@ -1096,8 +1480,6 @@ export default function GenerateScriptVideoPage() {
                   )}
 
                 </div>
-
-                {/* ACTIONS */}
 
                 <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
 
@@ -1255,15 +1637,38 @@ export default function GenerateScriptVideoPage() {
                     </div>
 
                     <p className="mt-2 text-sm leading-6 text-white/50">
-                      Tell the character what to say and
-                      describe how you want the performance
-                      to feel.
+                      Describe the scene, movement and
+                      performance normally. Put only the
+                      words you want the character to speak
+                      inside quotation marks.
+                    </p>
+
+                  </div>
+
+                  {/* SPEECH INSTRUCTION */}
+
+                  <div className="mb-4 rounded-2xl border border-purple-500/20 bg-purple-500/[0.06] px-4 py-3">
+
+                    <p className="text-xs font-semibold text-purple-200">
+                      💡 How speech works
+                    </p>
+
+                    <p className="mt-1 text-xs leading-5 text-white/50">
+                      Put spoken words inside{" "}
+                      <span className="font-semibold text-white/80">
+                        “quotation marks”
+                      </span>
+                      . Everything outside the
+                      quotation marks is treated as
+                      scene, acting or camera direction.
                     </p>
 
                   </div>
 
                   <textarea
-                    value={prompt}
+                    value={
+                      prompt
+                    }
                     onChange={(
                       event
                     ) =>
@@ -1274,47 +1679,113 @@ export default function GenerateScriptVideoPage() {
                     disabled={
                       generating
                     }
-                    rows={8}
+                    rows={9}
                     placeholder={`Example:
 
-Wait… you’re telling me this video was made from just ONE photo?`}
+A confident woman looks directly into the camera and smiles warmly. The camera slowly moves closer while she gestures naturally. She says, “Believe in yourself. Your next level starts with one decision.” Cinematic lighting, realistic movement, professional social-media video.`}
                     className="w-full resize-none rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm leading-6 text-white outline-none placeholder:text-white/25 focus:border-purple-400/50 disabled:opacity-50"
                   />
+
+                  {/* SCRIPT STATS */}
 
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
 
                     <span className="text-white/40">
-                      {wordCount} words
+                      {totalWordCount} total words
                     </span>
 
-                    {prompt.trim() && (
+                    <div className="flex flex-wrap items-center gap-3">
 
-                      <span
-                        className={
-                          scriptTooLong
-                            ? "text-red-400"
-                            : "text-green-400"
-                        }
-                      >
-                        Estimated speech:
-                        {" "}
-                        ~{estimatedSeconds}s
+                      <span className="text-purple-300/80">
+                        {spokenWordCount} spoken words
                       </span>
+
+                      {prompt.trim() && (
+                        <span
+                          className={
+                            scriptTooLong
+                              ? "text-red-400"
+                              : "text-green-400"
+                          }
+                        >
+                          Estimated speech:
+                          {" "}
+                          ~{estimatedSeconds}s
+                        </span>
+                      )}
+
+                    </div>
+
+                  </div>
+
+                  {/* QUOTATION ERROR */}
+
+                  {quotationError && (
+
+                    <div className="mt-4 rounded-xl border border-yellow-500/20 bg-yellow-500/10 px-4 py-3 text-xs leading-5 text-yellow-300">
+
+                      <strong>
+                        Quotation marks are not balanced.
+                      </strong>{" "}
+                      Make sure every spoken section has
+                      both an opening and closing quotation
+                      mark.
+                    </div>
+
+                  )}
+
+                  {/* NO SPOKEN DIALOGUE */}
+
+                  {missingSpokenDialogue &&
+                    !quotationError && (
+
+                      <div className="mt-4 rounded-xl border border-purple-500/20 bg-purple-500/10 px-4 py-3 text-xs leading-5 text-purple-200">
+
+                        AI audio is ON. Put the words
+                        you want the character to speak
+                        inside quotation marks, for example:
+                        {" "}
+                        <strong>
+                          “Believe in yourself.”
+                        </strong>
+
+                      </div>
 
                     )}
 
-                  </div>
+                  {/* TOO LONG */}
 
                   {scriptTooLong && (
 
                     <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-xs leading-5 text-red-300">
-                      This script is too long for a{" "}
-                      {duration}-second video.
-                      Shorten it or choose a longer
-                      duration.
+
+                      The spoken dialogue is too long
+                      for a {duration}-second video.
+                      Shorten the words inside the
+                      quotation marks or choose a
+                      longer duration.
+
                     </div>
 
                   )}
+
+                  {/* SILENT MODE INFO */}
+
+                  {!withAudio &&
+                    prompt.trim() &&
+                    spokenWordCount === 0 &&
+                    !quotationError && (
+
+                      <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-xs leading-5 text-white/40">
+
+                        Silent mode is enabled. You can
+                        describe the character's actions,
+                        camera movement and scene without
+                        adding spoken dialogue.
+
+                      </div>
+
+                    )}
 
                 </section>
 
@@ -1399,7 +1870,8 @@ Wait… you’re telling me this video was made from just ONE photo?`}
 
                         <p className="mt-1 text-xs leading-5 text-white/40">
                           Generate synchronized speech
-                          and natural sound.
+                          and natural sound from the
+                          quoted dialogue.
                         </p>
 
                       </div>
@@ -1525,6 +1997,8 @@ Wait… you’re telling me this video was made from just ONE photo?`}
                         disabled={
                           !image ||
                           !prompt.trim() ||
+                          quotationError ||
+                          missingSpokenDialogue ||
                           scriptTooLong ||
                           (credits !== null &&
                             credits <
@@ -1611,6 +2085,36 @@ Wait… you’re telling me this video was made from just ONE photo?`}
 
                   <p className="whitespace-pre-wrap text-sm leading-6 text-white/80">
                     {prompt}
+                  </p>
+
+                </div>
+
+                {/* SPOKEN DIALOGUE */}
+
+                <div className="mt-4 rounded-2xl border border-purple-500/20 bg-purple-500/[0.06] p-4">
+
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-purple-300/70">
+                    Spoken dialogue
+                  </p>
+
+                  {spokenText ? (
+
+                    <p className="text-sm leading-6 text-white/90">
+                      “{spokenText}”
+                    </p>
+
+                  ) : (
+
+                    <p className="text-sm leading-6 text-white/40">
+                      No spoken dialogue.
+                    </p>
+
+                  )}
+
+                  <p className="mt-2 text-xs text-white/35">
+                    {spokenWordCount} spoken words
+                    {" • "}
+                    ~{estimatedSeconds}s estimated speech
                   </p>
 
                 </div>

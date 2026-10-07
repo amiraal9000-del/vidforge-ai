@@ -26,7 +26,7 @@ import PublicNavbar from '@/components/PublicNavbar';
 |   {
 |     title: 'First Lady AI Video',
 |     description: 'One photo transformed into a cinematic speaking video.',
-|     src: 'https://YOUR-SUPABASE-URL/storage/v1/object/public/input-images/generated-videos/....mp4',
+|     src: 'https://ayzxdqpnqgkkzwmjtbkd.supabase.co/storage/v1/object/public/input-images/generated-videos/216a3d47-6a03-4539-9910-61753503a290/gen-vid-1791386020-kmENqLNQhzXegUpeElQh.mp4',
 |   },
 | ];
 |
@@ -38,17 +38,17 @@ const demoVideos = [
   {
     title: 'AI Speaking Video',
     description: 'Turn a single photo into a realistic speaking video.',
-    src: '',
+    src: 'https://ayzxdqpnqgkkzwmjtbkd.supabase.co/storage/v1/object/public/input-images/generated-videos/216a3d47-6a03-4539-9910-61753503a290/gen-vid-1791382415-daD7Dt6MCFEl577BcOX9.mp4',
   },
   {
     title: 'Zuriedge AI Bot',
     description: 'Create engaging AI characters and promotional videos.',
-    src: '',
+    src: 'https://ayzxdqpnqgkkzwmjtbkd.supabase.co/storage/v1/object/public/input-images/generated-videos/216a3d47-6a03-4539-9910-61753503a290/gen-vid-1791391081-SPH0oG2yQFu9fH1qEXmH.mp4',
   },
   {
     title: 'Cinematic AI Scene',
     description: 'Bring your ideas, characters and stories to life.',
-    src: '',
+    src: 'https://ayzxdqpnqgkkzwmjtbkd.supabase.co/storage/v1/object/public/input-images/generated-videos/216a3d47-6a03-4539-9910-61753503a290/gen-vid-1791384026-dSXgjKU7RAy2EHIGJeno.mp4',
   },
 ];
 

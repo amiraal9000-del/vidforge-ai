@@ -7,8 +7,12 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const flwSecretKey = process.env.FLUTTERWAVE_SECRET_KEY!;
 const siteUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 
+// ✅ Fixed: Admin client with proper empty cookies for server
 const supabaseAdmin = createServerClient(supabaseUrl, supabaseServiceKey, {
-  auth: { persistSession: false },
+  cookies: {
+    getAll: () => [],
+    setAll: () => {},
+  },
 });
 
 export async function POST(request: Request) {
@@ -23,8 +27,12 @@ export async function POST(request: Request) {
     const authHeader = request.headers.get('authorization');
     const token = authHeader?.replace('Bearer ', '');
 
+    // ✅ Fixed: Regular auth client with proper cookie format
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-      auth: { persistSession: false },
+      cookies: {
+        getAll: () => [],
+        setAll: () => {},
+      },
     });
 
     const { data: { user }, error: authError } = await supabase.auth.getUser(token || '');

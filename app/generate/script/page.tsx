@@ -6,11 +6,12 @@ import { Upload, Play, Loader2, Clock, Volume2, VolumeX, ArrowLeft, CheckCircle,
 import { toast } from 'sonner';
 import AppNavbar from '@/components/AppNavbar';
 
+// PRICING: All values = CREDITS, NOT NAIRA
 const PRICING = {
   durations: [
-    { seconds: 8, label: '8 sec (Reel)', costWithAudio: 800, costSilent: 500 },
-    { seconds: 15, label: '15 sec', costWithAudio: 1500, costSilent: 1200 },
-    { seconds: 30, label: '30 sec', costWithAudio: 2800, costSilent: 2500 },
+    { seconds: 8, label: '8 sec (Reel)', costWithAudio: 80, costSilent: 50 },
+    { seconds: 15, label: '15 sec', costWithAudio: 150, costSilent: 120 },
+    { seconds: 30, label: '30 sec', costWithAudio: 280, costSilent: 250 },
   ],
 };
 
@@ -29,7 +30,6 @@ export default function ScriptGeneratePage() {
   const [showReview, setShowReview] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Calculate word count & timing — defined ONCE at top
   const wordCount = prompt.trim() ? prompt.trim().split(/\s+/).length : 0;
 
   const supabase = createBrowserClient(
@@ -105,7 +105,7 @@ export default function ScriptGeneratePage() {
 
     if (!prompt) return toast.error('Write your script first');
     if (!image) return toast.error('Upload a reference photo');
-    if (!canAfford) return toast.error(`Need ₦${totalCost} — please top up`);
+    if (!canAfford) return toast.error(`Need ${totalCost} credits — please top up`);
     if (!scriptFits && withAudio) {
       toast.warning(`Script may be too long — estimated ${estimatedSpeechSeconds}s vs ${duration}s selected`);
     }
@@ -163,10 +163,10 @@ export default function ScriptGeneratePage() {
           <h1 className="text-2xl font-bold mb-2">Photo + Script → Video</h1>
           <p className="text-zinc-400 mb-6">Write your story, preview it, then create your video</p>
 
-          {/* Balance */}
+          {/* BALANCE — CLEARLY SHOWS CREDITS */}
           <div className="mb-6 p-4 bg-zinc-900 rounded-xl border border-zinc-800 flex justify-between items-center">
-            <span>Your Balance: <strong className="text-emerald-400 text-lg">₦{userCredits}</strong></span>
-            <button className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium">Top Up</button>
+            <span>Your Balance: <strong className="text-emerald-400 text-lg">{userCredits} Credits</strong></span>
+            <button onClick={() => router.push('/top-up')} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium">Top Up</button>
           </div>
 
           {!videoUrl ? (
@@ -225,7 +225,7 @@ export default function ScriptGeneratePage() {
                     )}
                   </div>
 
-                  {/* Duration */}
+                  {/* Duration — NOW SHOWS CREDITS NOT NAIRA */}
                   <div>
                     <label className="flex items-center gap-2 mb-3 font-medium">
                       <Clock size={16} /> Video Length
@@ -237,7 +237,7 @@ export default function ScriptGeneratePage() {
                             duration === opt.seconds ? 'border-violet-500 bg-violet-500/10 text-violet-400' : 'border-zinc-800 hover:border-zinc-600'
                           }`}>
                           <div className="font-bold">{opt.label}</div>
-                          <div className="text-xs text-zinc-400 mt-1">₦{opt.costWithAudio} / ₦{opt.costSilent}</div>
+                          <div className="text-xs text-zinc-400 mt-1">{opt.costWithAudio} cr / {opt.costSilent} cr</div>
                         </button>
                       ))}
                     </div>
@@ -255,17 +255,16 @@ export default function ScriptGeneratePage() {
                     </button>
                   </div>
 
-                  {/* Cost Summary */}
+                  {/* COST SUMMARY — ALL CREDITS NOW */}
                   <div className={`p-4 rounded-xl border ${canAfford ? 'bg-emerald-950/30 border-emerald-800' : 'bg-red-950/30 border-red-800'}`}>
                     <div className="flex justify-between text-lg">
                       <span>Cost:</span>
-                      <strong>₦{totalCost}</strong>
+                      <strong>{totalCost} Credits</strong>
                     </div>
-                    {!canAfford && <p className="text-red-400 text-sm mt-1">Need ₦{totalCost - userCredits} more — please top up</p>}
+                    {!canAfford && <p className="text-red-400 text-sm mt-1">Need {totalCost - userCredits} more credits — please top up</p>}
                     {!scriptFits && withAudio && <p className="text-amber-400 text-sm mt-1">⚠️ Script may exceed selected duration</p>}
                   </div>
 
-                  {/* Continue to Review */}
                   <button type="submit" disabled={!image || !prompt.trim() || !canAfford}
                     className="w-full py-4 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl font-bold flex items-center justify-center gap-2 transition">
                     <Eye size={20} /> Review & Continue
@@ -280,7 +279,6 @@ export default function ScriptGeneratePage() {
                     <p className="text-zinc-400 text-sm">Please confirm everything is correct before creating</p>
                   </div>
 
-                  {/* Review Summary Card */}
                   <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 space-y-4">
                     <div>
                       <span className="text-zinc-400 text-sm">Reference Photo</span>
@@ -304,17 +302,16 @@ export default function ScriptGeneratePage() {
                     </div>
                     
                     <div className="border-t border-zinc-800 pt-4 flex justify-between items-center">
-                      <span className="text-zinc-400">Your Balance: ₦{userCredits}</span>
-                      <span className="text-xl font-bold text-emerald-400">−₦{totalCost}</span>
+                      <span className="text-zinc-400">Your Balance: {userCredits} Credits</span>
+                      <span className="text-xl font-bold text-emerald-400">−{totalCost} Credits</span>
                     </div>
                     
                     <div className="flex justify-between items-center text-lg font-semibold">
                       <span>After Creation</span>
-                      <span className="text-emerald-400">₦{userCredits - totalCost}</span>
+                      <span className="text-emerald-400">{userCredits - totalCost} Credits</span>
                     </div>
                   </div>
 
-                  {/* Action Buttons */}
                   <div className="flex gap-4">
                     <button onClick={() => setShowReview(false)}
                       className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition">

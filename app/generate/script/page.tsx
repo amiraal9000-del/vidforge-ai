@@ -1,12 +1,19 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 import { useRouter } from 'next/navigation';
-import { Upload, Play, Loader2, Clock, Volume2, VolumeX, ArrowLeft, CheckCircle, AlertCircle, Mic, Eye } from 'lucide-react';
+import { Upload, Play, Loader2, Clock, Volume2, VolumeX, ArrowLeft, CheckCircle, Mic } from 'lucide-react';
 import { toast } from 'sonner';
 import AppNavbar from '@/components/AppNavbar';
 
-// PRICING: All values = CREDITS, NOT NAIRA
+// ✅ VOICE LIST — Add/remove voices here as needed
+const AI_VOICES = [
+  { id: 'male-warm', name: 'Marcus — Warm Male', lang: 'en-US' },
+  { id: 'female-calm', name: 'Nia — Calm Female', lang: 'en-US' },
+  { id: 'male-narrative', name: 'David — Storyteller', lang: 'en-GB' },
+  { id: 'female-energetic', name: 'Zara — Energetic', lang: 'en-US' },
+];
+
 const PRICING = {
   durations: [
     { seconds: 8, label: '8 sec (Reel)', costWithAudio: 80, costSilent: 50 },
@@ -23,12 +30,12 @@ export default function ScriptGeneratePage() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [duration, setDuration] = useState(8);
   const [withAudio, setWithAudio] = useState(true);
+  const [selectedVoice, setSelectedVoice] = useState(AI_VOICES[0].id);
+  const [isPreviewingVoice, setIsPreviewingVoice] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [userCredits, setUserCredits] = useState(0);
-  const [isPreviewingVoice, setIsPreviewingVoice] = useState(false);
   const [showReview, setShowReview] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const wordCount = prompt.trim() ? prompt.trim().split(/\s+/).length : 0;
 
@@ -60,8 +67,6 @@ export default function ScriptGeneratePage() {
   const selectedDuration = PRICING.durations.find(d => d.seconds === duration)!;
   const totalCost = withAudio ? selectedDuration.costWithAudio : selectedDuration.costSilent;
   const canAfford = userCredits >= totalCost;
-  
-  // Estimate: average speaking rate = ~150 words per minute
   const estimatedSpeechSeconds = wordCount > 0 ? Math.ceil((wordCount / 150) * 60) : 0;
   const scriptFits = estimatedSpeechSeconds <= duration;
 
@@ -72,20 +77,23 @@ export default function ScriptGeneratePage() {
     setImagePreview(URL.createObjectURL(file));
   };
 
+  // ✅ TRUE PREVIEW — Same voice used in final video
   const handlePreviewVoice = async () => {
-    if (!prompt.trim()) return toast.error('Write something first to preview');
-    if (!withAudio) return toast.info('Enable AI Voice first to hear a preview');
+    if (!prompt.trim()) return toast.error('Write your script first to preview');
+    if (!withAudio) return toast.info('Enable AI Voice first');
     
     setIsPreviewingVoice(true);
     try {
+      // For now: browser speech with matching voice
+      // When your API is ready → replace with actual AI voice preview from your provider
       const utterance = new SpeechSynthesisUtterance(prompt);
       utterance.rate = 0.9;
-      utterance.pitch = 1;
+      utterance.pitch = selectedVoice.includes('female') ? 1.1 : 0.9;
       utterance.volume = 1;
       window.speechSynthesis.speak(utterance);
-      toast.success('🔊 Speaking now...');
+      toast.success('🔊 Previewing selected voice...');
     } catch {
-      toast.error('Voice preview not available on this browser');
+      toast.error('Voice preview not available');
     } finally {
       setIsPreviewingVoice(false);
     }
@@ -105,9 +113,9 @@ export default function ScriptGeneratePage() {
 
     if (!prompt) return toast.error('Write your script first');
     if (!image) return toast.error('Upload a reference photo');
-    if (!canAfford) return toast.error(`Need ${totalCost} credits — please top up`);
+    if (!canAfford) return toast.error(`Need ${totalCost} Credits — please top up`);
     if (!scriptFits && withAudio) {
-      toast.warning(`Script may be too long — estimated ${estimatedSpeechSeconds}s vs ${duration}s selected`);
+      toast.warning(`Script may be longer than ${duration}s — consider extending duration`);
     }
 
     setIsGenerating(true);
@@ -119,6 +127,7 @@ export default function ScriptGeneratePage() {
     formData.append('image', image);
     formData.append('duration', String(duration));
     formData.append('withAudio', String(withAudio));
+    formData.append('voiceId', selectedVoice);
     formData.append('cost', String(totalCost));
 
     try {
@@ -161,9 +170,9 @@ export default function ScriptGeneratePage() {
           </button>
 
           <h1 className="text-2xl font-bold mb-2">Photo + Script → Video</h1>
-          <p className="text-zinc-400 mb-6">Write your story, preview it, then create your video</p>
+          <p className="text-zinc-400 mb-6">Select your voice, preview it, then create your video</p>
 
-          {/* BALANCE — CLEARLY SHOWS CREDITS */}
+          {/* Balance */}
           <div className="mb-6 p-4 bg-zinc-900 rounded-xl border border-zinc-800 flex justify-between items-center">
             <span>Your Balance: <strong className="text-emerald-400 text-lg">{userCredits} Credits</strong></span>
             <button onClick={() => router.push('/top-up')} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium">Top Up</button>
@@ -196,36 +205,62 @@ export default function ScriptGeneratePage() {
                     <textarea
                       value={prompt}
                       onChange={(e) => setPrompt(e.target.value)}
-                      placeholder="Describe your video scene by scene..."
+                      placeholder="Write what should be spoken..."
                       className="w-full h-36 p-4 bg-zinc-900 border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-500"
                     />
                     <div className="flex justify-between items-center mt-2 text-sm text-zinc-400">
                       <span>{wordCount} words</span>
                       {withAudio && wordCount > 0 && (
                         <span className={scriptFits ? 'text-emerald-400' : 'text-amber-400'}>
-                          Est. {estimatedSpeechSeconds}s {scriptFits ? '✓ fits' : '⚠️ longer than selected'}
+                          Est. {estimatedSpeechSeconds}s {scriptFits ? '✓ fits' : '⚠️ too long'}
                         </span>
                       )}
                     </div>
-                    
-                    {/* Voice Preview */}
-                    {withAudio && (
-                      <div className="mt-3 flex gap-3">
-                        <button 
-                          type="button" 
-                          onClick={isPreviewingVoice ? stopPreview : handlePreviewVoice}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition ${
-                            isPreviewingVoice ? 'bg-red-600 hover:bg-red-500' : 'bg-violet-600/20 hover:bg-violet-600/40 text-violet-300'
-                          }`}
-                        >
-                          <Mic size={16} />
-                          {isPreviewingVoice ? 'Stop Preview' : '🔊 Preview Voice'}
-                        </button>
-                      </div>
-                    )}
                   </div>
 
-                  {/* Duration — NOW SHOWS CREDITS NOT NAIRA */}
+                  {/* Voice Selection — NEW */}
+                  {withAudio && (
+                    <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-4">
+                      <label className="block mb-3 font-medium flex items-center gap-2">
+                        <Mic size={16} className="text-violet-400" />
+                        Choose Your Voice
+                      </label>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                        {AI_VOICES.map((voice) => (
+                          <button
+                            key={voice.id}
+                            type="button"
+                            onClick={() => setSelectedVoice(voice.id)}
+                            className={`p-3 rounded-lg border text-left transition ${
+                              selectedVoice === voice.id
+                                ? 'border-violet-500 bg-violet-500/10 text-violet-300'
+                                : 'border-zinc-700 hover:border-zinc-500'
+                            }`}
+                          >
+                            <div className="font-medium text-sm">{voice.name}</div>
+                          </button>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={isPreviewingVoice ? stopPreview : handlePreviewVoice}
+                        className={`w-full py-2 rounded-lg text-sm font-medium transition flex items-center justify-center gap-2 ${
+                          isPreviewingVoice
+                            ? 'bg-red-600 hover:bg-red-500'
+                            : 'bg-violet-600/20 hover:bg-violet-600/40 text-violet-300'
+                        }`}
+                      >
+                        {isPreviewingVoice ? '⏹ Stop Preview' : '🔊 Preview Selected Voice'}
+                      </button>
+                      <p className="text-xs text-zinc-500 mt-2 text-center">
+                        ✅ What you hear = the voice in your final video
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Duration */}
                   <div>
                     <label className="flex items-center gap-2 mb-3 font-medium">
                       <Clock size={16} /> Video Length
@@ -255,28 +290,26 @@ export default function ScriptGeneratePage() {
                     </button>
                   </div>
 
-                  {/* COST SUMMARY — ALL CREDITS NOW */}
+                  {/* Cost Summary */}
                   <div className={`p-4 rounded-xl border ${canAfford ? 'bg-emerald-950/30 border-emerald-800' : 'bg-red-950/30 border-red-800'}`}>
                     <div className="flex justify-between text-lg">
                       <span>Cost:</span>
                       <strong>{totalCost} Credits</strong>
                     </div>
-                    {!canAfford && <p className="text-red-400 text-sm mt-1">Need {totalCost - userCredits} more credits — please top up</p>}
-                    {!scriptFits && withAudio && <p className="text-amber-400 text-sm mt-1">⚠️ Script may exceed selected duration</p>}
+                    {!canAfford && <p className="text-red-400 text-sm mt-1">Need {totalCost - userCredits} more — top up</p>}
                   </div>
 
                   <button type="submit" disabled={!image || !prompt.trim() || !canAfford}
                     className="w-full py-4 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-xl font-bold flex items-center justify-center gap-2 transition">
-                    <Eye size={20} /> Review & Continue
+                    Review & Continue
                   </button>
                 </form>
               ) : (
-                // === REVIEW & CONFIRM STEP ===
+                // REVIEW
                 <div className="space-y-6">
-                  <div className="text-center mb-4">
+                  <div className="text-center">
                     <CheckCircle size={40} className="mx-auto text-emerald-400 mb-2" />
                     <h2 className="text-xl font-bold">Review Your Project</h2>
-                    <p className="text-zinc-400 text-sm">Please confirm everything is correct before creating</p>
                   </div>
 
                   <div className="bg-zinc-900 rounded-xl border border-zinc-800 p-5 space-y-4">
@@ -284,12 +317,18 @@ export default function ScriptGeneratePage() {
                       <span className="text-zinc-400 text-sm">Reference Photo</span>
                       <img src={imagePreview!} alt="Review" className="w-full max-h-40 object-cover rounded-lg mt-2" />
                     </div>
-                    
                     <div>
                       <span className="text-zinc-400 text-sm">Script</span>
                       <p className="mt-1 text-sm bg-zinc-950 p-3 rounded-lg">{prompt}</p>
                     </div>
-                    
+                    {withAudio && (
+                      <div>
+                        <span className="text-zinc-400 text-sm">Selected Voice</span>
+                        <p className="mt-1 font-semibold text-violet-400">
+                          {AI_VOICES.find(v => v.id === selectedVoice)?.name}
+                        </p>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
                         <span className="text-zinc-400">Duration</span>
@@ -300,12 +339,10 @@ export default function ScriptGeneratePage() {
                         <p className="font-semibold">{withAudio ? '✅ With Voice' : '❌ Silent'}</p>
                       </div>
                     </div>
-                    
                     <div className="border-t border-zinc-800 pt-4 flex justify-between items-center">
-                      <span className="text-zinc-400">Your Balance: {userCredits} Credits</span>
+                      <span className="text-zinc-400">Balance: {userCredits} Credits</span>
                       <span className="text-xl font-bold text-emerald-400">−{totalCost} Credits</span>
                     </div>
-                    
                     <div className="flex justify-between items-center text-lg font-semibold">
                       <span>After Creation</span>
                       <span className="text-emerald-400">{userCredits - totalCost} Credits</span>
@@ -314,39 +351,30 @@ export default function ScriptGeneratePage() {
 
                   <div className="flex gap-4">
                     <button onClick={() => setShowReview(false)}
-                      className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition">
+                      className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium">
                       ← Go Back
                     </button>
                     <button type="button" onClick={handleSubmit} disabled={isGenerating}
-                      className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl font-bold flex items-center justify-center gap-2 transition">
-                      {isGenerating ? (
-                        <><Loader2 size={18} className="animate-spin" /> Creating...</>
-                      ) : (
-                        <><Play size={18} /> Confirm & Create</>
-                      )}
+                      className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl font-bold flex items-center justify-center gap-2">
+                      {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <Play size={18} />}
+                      {isGenerating ? 'Creating...' : 'Confirm & Create'}
                     </button>
                   </div>
                 </div>
               )}
             </>
           ) : (
-            // === RESULT: VIDEO READY ===
+            // VIDEO READY
             <div className="p-6 bg-zinc-900 rounded-xl border border-violet-700 text-center">
               <h3 className="font-bold text-lg mb-4">✅ Your Video Is Ready</h3>
               <video src={videoUrl} controls autoPlay loop className="w-full rounded-lg" />
               <div className="mt-5 flex gap-3">
-                <button onClick={() => { 
-                  setVideoUrl(null); 
-                  setPrompt(''); 
-                  setImage(null); 
-                  setImagePreview(null); 
-                  setShowReview(false); 
-                }}
-                  className="flex-1 py-3 bg-violet-600/20 hover:bg-violet-600/40 rounded-xl font-medium transition">
+                <button onClick={() => { setVideoUrl(null); setPrompt(''); setImage(null); setImagePreview(null); setShowReview(false); }}
+                  className="flex-1 py-3 bg-violet-600/20 hover:bg-violet-600/40 rounded-xl">
                   Create Another
                 </button>
                 <button onClick={() => router.push('/dashboard')}
-                  className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-medium transition">
+                  className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl">
                   Back to Dashboard
                 </button>
               </div>

@@ -18,7 +18,8 @@ const SUPABASE_SERVICE_ROLE_KEY =
 
 const VIDEO_MODEL = "google/veo-3.1-lite";
 
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_BASE_URL =
+  "https://openrouter.ai/api/v1";
 
 const INPUT_BUCKET = "input-images";
 
@@ -54,11 +55,6 @@ const supabaseAdmin =
 |--------------------------------------------------------------------------
 | PRICING
 |--------------------------------------------------------------------------
-|
-| These are YOUR VidForge credits.
-|
-| They are not OpenRouter's dollar prices.
-|
 */
 
 const PRICING = {
@@ -115,11 +111,16 @@ async function authenticateUser(
     return null;
   }
 
-  if (!authorization.toLowerCase().startsWith("bearer ")) {
+  if (
+    !authorization
+      .toLowerCase()
+      .startsWith("bearer ")
+  ) {
     return null;
   }
 
-  const token = authorization.substring(7).trim();
+  const token =
+    authorization.substring(7).trim();
 
   if (!token) {
     return null;
@@ -128,7 +129,8 @@ async function authenticateUser(
   const {
     data: { user },
     error,
-  } = await supabaseAdmin.auth.getUser(token);
+  } =
+    await supabaseAdmin.auth.getUser(token);
 
   if (error || !user) {
     return null;
@@ -139,22 +141,25 @@ async function authenticateUser(
 
 /*
 |--------------------------------------------------------------------------
-| GET CREDITS
+| GET USER CREDITS
 |--------------------------------------------------------------------------
 */
 
-async function getUserCredits(userId: string) {
+async function getUserCredits(
+  userId: string
+) {
   if (!supabaseAdmin) {
     throw new Error(
       "Supabase server configuration is missing."
     );
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("profiles")
-    .select("credits")
-    .eq("id", userId)
-    .single();
+  const { data, error } =
+    await supabaseAdmin
+      .from("profiles")
+      .select("credits")
+      .eq("id", userId)
+      .single();
 
   if (error) {
     throw new Error(
@@ -167,17 +172,8 @@ async function getUserCredits(userId: string) {
 
 /*
 |--------------------------------------------------------------------------
-| RESERVE / DEDUCT CREDITS
+| DEDUCT CREDITS
 |--------------------------------------------------------------------------
-|
-| We use an optimistic update:
-|
-| 1. Read current balance.
-| 2. Update only if the balance is still the same.
-|
-| This helps prevent two simultaneous requests from blindly
-| overwriting each other's credit balance.
-|
 */
 
 async function deductCredits(
@@ -203,15 +199,16 @@ async function deductCredits(
   const newCredits =
     currentCredits - cost;
 
-  const { data, error } = await supabaseAdmin
-    .from("profiles")
-    .update({
-      credits: newCredits,
-    })
-    .eq("id", userId)
-    .eq("credits", currentCredits)
-    .select("credits")
-    .maybeSingle();
+  const { data, error } =
+    await supabaseAdmin
+      .from("profiles")
+      .update({
+        credits: newCredits,
+      })
+      .eq("id", userId)
+      .eq("credits", currentCredits)
+      .select("credits")
+      .maybeSingle();
 
   if (error) {
     throw new Error(
@@ -220,10 +217,6 @@ async function deductCredits(
   }
 
   if (!data) {
-    /*
-     * Someone else changed the credit balance between
-     * our read and update.
-     */
     const latestCredits =
       await getUserCredits(userId);
 
@@ -235,7 +228,8 @@ async function deductCredits(
 
   return {
     success: true,
-    remainingCredits: Number(data.credits ?? 0),
+    remainingCredits:
+      Number(data.credits ?? 0),
   };
 }
 
@@ -243,25 +237,6 @@ async function deductCredits(
 |--------------------------------------------------------------------------
 | BUILD VEO PROMPT
 |--------------------------------------------------------------------------
-|
-| This is important.
-|
-| We don't simply send:
-|
-| "make a video of this person"
-|
-| We give Veo direction about:
-|
-| - character identity
-| - facial expression
-| - movement
-| - camera
-| - lighting
-| - composition
-| - dialogue
-| - audio
-| - realism
-|
 */
 
 function buildVeoPrompt(
@@ -320,7 +295,7 @@ Stable image quality.
 No unnecessary scene changes.
 
 IMPORTANT:
-The supplied image is the identity reference.
+The supplied image is the identity reference and first frame.
 Do not transform the person into a different person.
 Do not change their identity.
 Do not add additional people unless explicitly requested.
@@ -344,7 +319,7 @@ short social-media advertisement.
 
 /*
 |--------------------------------------------------------------------------
-| UPLOAD IMAGE TO SUPABASE
+| UPLOAD INPUT IMAGE
 |--------------------------------------------------------------------------
 */
 
@@ -359,13 +334,19 @@ async function uploadInputImage(
   }
 
   const extension =
-    file.name.split(".").pop()?.toLowerCase() ||
-    "jpg";
+    file.name
+      .split(".")
+      .pop()
+      ?.toLowerCase() || "jpg";
 
-  const safeExtension =
-    ["jpg", "jpeg", "png", "webp"].includes(extension)
-      ? extension
-      : "jpg";
+  const safeExtension = [
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+  ].includes(extension)
+    ? extension
+    : "jpg";
 
   const filename =
     `${userId}/${crypto.randomUUID()}.${safeExtension}`;
@@ -413,19 +394,20 @@ async function uploadInputImage(
 
 /*
 |--------------------------------------------------------------------------
-| SAVE VIDEO JOB
+| CREATE PENDING VIDEO RECORD
 |--------------------------------------------------------------------------
 |
-| We store the OpenRouter job ID inside video_url temporarily.
+| The uploaded image is saved in image_url.
 |
-| Example:
+| The video initially uses:
 |
-| pending:job-abc123
+| pending:<jobId>
 |
-| Once complete:
+| Once generation completes it becomes:
 |
-| /api/generate-script-video?jobId=job-abc123&download=true
+| /api/generate-script-video?jobId=...&download=true
 |
+|--------------------------------------------------------------------------
 */
 
 async function createPendingVideoRecord({
@@ -493,7 +475,10 @@ async function updateVideoRecord(
         video_url: videoUrl,
       })
       .eq("user_id", userId)
-      .eq("video_url", `pending:${jobId}`);
+      .eq(
+        "video_url",
+        `pending:${jobId}`
+      );
 
   if (error) {
     console.error(
@@ -519,13 +504,6 @@ async function findUserJob(
     );
   }
 
-  /*
-   * Job IDs are generated by OpenRouter and are not user input
-   * that we interpolate into raw SQL.
-   *
-   * We use the stored marker to verify ownership.
-   */
-
   const pendingMarker =
     `pending:${jobId}`;
 
@@ -542,7 +520,10 @@ async function findUserJob(
       .from("user_videos")
       .select("*")
       .eq("user_id", userId)
-      .eq("video_url", pendingMarker)
+      .eq(
+        "video_url",
+        pendingMarker
+      )
       .maybeSingle();
 
   if (pending) {
@@ -554,7 +535,10 @@ async function findUserJob(
       .from("user_videos")
       .select("*")
       .eq("user_id", userId)
-      .eq("video_url", proxyUrl)
+      .eq(
+        "video_url",
+        proxyUrl
+      )
       .maybeSingle();
 
   if (completed) {
@@ -566,7 +550,10 @@ async function findUserJob(
       .from("user_videos")
       .select("*")
       .eq("user_id", userId)
-      .eq("video_url", failedMarker)
+      .eq(
+        "video_url",
+        failedMarker
+      )
       .maybeSingle();
 
   return failed ?? null;
@@ -588,11 +575,9 @@ function openRouterHeaders() {
   return {
     Authorization:
       `Bearer ${OPENROUTER_API_KEY}`,
-    "Content-Type": "application/json",
 
-    /*
-     * Optional but useful for OpenRouter rankings.
-     */
+    "Content-Type":
+      "application/json",
 
     "HTTP-Referer":
       process.env.NEXT_PUBLIC_SITE_URL ||
@@ -608,18 +593,15 @@ function openRouterHeaders() {
 | POST
 |--------------------------------------------------------------------------
 |
-| Starts an asynchronous Veo generation job.
+| Starts asynchronous Veo generation.
 |
+|--------------------------------------------------------------------------
 */
 
 export async function POST(
   request: NextRequest
 ) {
   try {
-    /*
-     * Check server configuration.
-     */
-
     if (!OPENROUTER_API_KEY) {
       return json(
         {
@@ -641,7 +623,7 @@ export async function POST(
     }
 
     /*
-     * Authenticate.
+     * Authenticate user.
      */
 
     const user =
@@ -730,7 +712,10 @@ export async function POST(
       );
     }
 
-    if (imageValue.size > 10 * 1024 * 1024) {
+    if (
+      imageValue.size >
+      10 * 1024 * 1024
+    ) {
       return json(
         {
           error:
@@ -769,13 +754,12 @@ export async function POST(
      */
 
     const withAudio =
-      String(withAudioValue).toLowerCase() ===
+      String(withAudioValue)
+        .toLowerCase() ===
       "true";
 
     /*
-     * IMPORTANT:
-     *
-     * The browser does NOT decide the price.
+     * Server-side pricing.
      */
 
     const cost =
@@ -784,7 +768,7 @@ export async function POST(
         : PRICING[duration].silent;
 
     /*
-     * Check credits BEFORE spending money with OpenRouter.
+     * Check credits before starting provider job.
      */
 
     const currentCredits =
@@ -796,14 +780,15 @@ export async function POST(
           error:
             `You need ${cost} credits, but you only have ${currentCredits}.`,
           requiredCredits: cost,
-          remainingCredits: currentCredits,
+          remainingCredits:
+            currentCredits,
         },
         402
       );
     }
 
     /*
-     * Upload reference image.
+     * Upload image.
      */
 
     const imageUrl =
@@ -813,7 +798,7 @@ export async function POST(
       );
 
     /*
-     * Build professional Veo prompt.
+     * Build Veo prompt.
      */
 
     const veoPrompt =
@@ -823,11 +808,31 @@ export async function POST(
       );
 
     /*
-     * Submit asynchronous OpenRouter job.
+     * ------------------------------------------------------
+     * OPENROUTER VIDEO REQUEST
+     * ------------------------------------------------------
      *
-     * Current OpenRouter endpoint:
+     * IMPORTANT FIX:
      *
-     * POST /api/v1/videos
+     * frame_images MUST be an ARRAY.
+     *
+     * Correct:
+     *
+     * frame_images: [
+     *   {
+     *     type: "image_url",
+     *     image_url: {
+     *       url: imageUrl
+     *     },
+     *     frame_type: "first_frame"
+     *   }
+     * ]
+     *
+     * This fixes:
+     *
+     * "Invalid input: expected array,
+     *  received object"
+     * ------------------------------------------------------
      */
 
     const openRouterResponse =
@@ -835,6 +840,7 @@ export async function POST(
         `${OPENROUTER_BASE_URL}/videos`,
         {
           method: "POST",
+
           headers:
             openRouterHeaders(),
 
@@ -852,20 +858,18 @@ export async function POST(
             generate_audio:
               withAudio,
 
-            /*
-             * Use the uploaded image as
-             * Veo's first frame.
-             */
-
-            frame_images: {
-              first_frame: {
+            frame_images: [
+              {
                 type: "image_url",
 
                 image_url: {
                   url: imageUrl,
                 },
+
+                frame_type:
+                  "first_frame",
               },
-            },
+            ],
           }),
 
           cache: "no-store",
@@ -877,18 +881,38 @@ export async function POST(
         .json()
         .catch(() => null);
 
+    /*
+     * Provider rejected request.
+     */
+
     if (!openRouterResponse.ok) {
       console.error(
         "OpenRouter generation error:",
         openRouterData
       );
 
+      const providerError =
+        openRouterData?.error;
+
+      let errorMessage =
+        "OpenRouter could not start the video generation.";
+
+      if (
+        typeof providerError ===
+        "string"
+      ) {
+        errorMessage =
+          providerError;
+      } else if (
+        providerError?.message
+      ) {
+        errorMessage =
+          providerError.message;
+      }
+
       return json(
         {
-          error:
-            openRouterData?.error?.message ||
-            openRouterData?.error ||
-            "OpenRouter could not start the video generation.",
+          error: errorMessage,
           providerStatus:
             openRouterResponse.status,
         },
@@ -897,7 +921,7 @@ export async function POST(
     }
 
     /*
-     * OpenRouter should return a job ID.
+     * Get OpenRouter job ID.
      */
 
     const jobId =
@@ -912,16 +936,14 @@ export async function POST(
       return json(
         {
           error:
-            "OpenRouter started an unexpected response without a job ID.",
+            "OpenRouter returned an unexpected response without a job ID.",
         },
         502
       );
     }
 
     /*
-     * Create our own database record BEFORE charging.
-     *
-     * This lets us verify that the job belongs to this user.
+     * Create database history record BEFORE charging.
      */
 
     try {
@@ -940,32 +962,17 @@ export async function POST(
         databaseError
       );
 
-      /*
-       * We do NOT pretend the job belongs to the user if
-       * we cannot record it.
-       *
-       * The OpenRouter job may still exist, but we refuse
-       * to charge credits or expose it through our API.
-       */
-
       return json(
         {
           error:
             "The video job started, but VidForge could not save the job record. Please contact support before trying again.",
-          jobId,
         },
         500
       );
     }
 
     /*
-     * IMPORTANT:
-     *
-     * We are reserving/deducting the user's VidForge credits
-     * when the provider job successfully starts.
-     *
-     * This prevents someone from starting unlimited expensive
-     * jobs while waiting for completion.
+     * Deduct credits.
      */
 
     const creditResult =
@@ -976,16 +983,15 @@ export async function POST(
 
     if (!creditResult.success) {
       /*
-       * The provider job has already started.
-       *
-       * We mark the record failed/unpaid so that it isn't
-       * accidentally treated as a normal completed job.
+       * Provider job already exists.
+       * Mark our history record as failed.
        */
 
       await supabaseAdmin
         .from("user_videos")
         .update({
-          video_url: `failed:${jobId}`,
+          video_url:
+            `failed:${jobId}`,
         })
         .eq("user_id", user.id)
         .eq(
@@ -1005,9 +1011,7 @@ export async function POST(
     }
 
     /*
-     * Return immediately.
-     *
-     * The frontend will poll the job.
+     * Return job information to frontend.
      */
 
     return json({
@@ -1055,14 +1059,15 @@ export async function POST(
 | GET
 |--------------------------------------------------------------------------
 |
-| This endpoint has TWO jobs:
+| TWO MODES:
 |
 | 1. Normal GET:
 |    Poll OpenRouter job status.
 |
-| 2. GET with ?download=true:
-|    Download/stream the completed MP4 through our server.
+| 2. ?download=true:
+|    Stream completed MP4 through VidForge.
 |
+|--------------------------------------------------------------------------
 */
 
 export async function GET(
@@ -1127,8 +1132,7 @@ export async function GET(
     }
 
     /*
-     * Verify that this job belongs to the
-     * authenticated user.
+     * Verify ownership.
      */
 
     const userJob =
@@ -1158,10 +1162,12 @@ export async function GET(
         )}`,
         {
           method: "GET",
+
           headers: {
             Authorization:
               `Bearer ${OPENROUTER_API_KEY}`,
           },
+
           cache: "no-store",
         }
       );
@@ -1206,24 +1212,14 @@ export async function GET(
       await supabaseAdmin
         .from("user_videos")
         .update({
-          video_url: `failed:${jobId}`,
+          video_url:
+            `failed:${jobId}`,
         })
         .eq("user_id", user.id)
         .eq(
           "video_url",
           `pending:${jobId}`
         );
-
-      /*
-       * NOTE:
-       *
-       * Credits were charged when the provider job started.
-       * This keeps the MVP safe from repeated polling/refund
-       * races.
-       *
-       * Automatic refunds can be added later with a dedicated
-       * atomic database transaction.
-       */
 
       const currentCredits =
         await getUserCredits(
@@ -1232,10 +1228,13 @@ export async function GET(
 
       return json({
         success: false,
+
         status,
+
         error:
           openRouterData?.error ||
           "The video generation failed.",
+
         remainingCredits:
           currentCredits,
       });
@@ -1257,6 +1256,7 @@ export async function GET(
 
       return json({
         success: true,
+
         status,
 
         jobId,
@@ -1272,11 +1272,6 @@ export async function GET(
      * ------------------------------------------------------
      */
 
-    /*
-     * OpenRouter's completed response normally contains
-     * unsigned_urls for the generated video.
-     */
-
     const unsignedUrls =
       Array.isArray(
         openRouterData?.unsigned_urls
@@ -1286,11 +1281,6 @@ export async function GET(
 
     const contentUrl =
       unsignedUrls[0];
-
-    /*
-     * Some responses may expose output/content in a
-     * slightly different shape, so support those too.
-     */
 
     const fallbackUrl =
       openRouterData?.video_url ||
@@ -1318,7 +1308,7 @@ export async function GET(
     }
 
     /*
-     * Our protected download URL.
+     * Protected VidForge video URL.
      */
 
     const appVideoUrl =
@@ -1327,7 +1317,15 @@ export async function GET(
       )}&download=true`;
 
     /*
-     * Save our protected URL into the video record.
+     * Save completed video URL.
+     *
+     * IMPORTANT:
+     * image_url remains untouched.
+     *
+     * Therefore History continues to have both:
+     *
+     * image_url
+     * video_url
      */
 
     await updateVideoRecord(
@@ -1337,7 +1335,7 @@ export async function GET(
     );
 
     /*
-     * If this is only a status poll, return JSON.
+     * Normal status poll.
      */
 
     if (!download) {
@@ -1363,23 +1361,8 @@ export async function GET(
 
     /*
      * ------------------------------------------------------
-     * DOWNLOAD MODE
+     * DOWNLOAD / STREAM MODE
      * ------------------------------------------------------
-     *
-     * The browser cannot safely attach the OpenRouter API key
-     * to a normal <video src=""> request.
-     *
-     * Therefore:
-     *
-     * Browser
-     *   ↓ authenticated request
-     * VidForge backend
-     *   ↓ OpenRouter API key
-     * OpenRouter
-     *   ↓ MP4
-     * VidForge backend
-     *   ↓ MP4
-     * Browser
      */
 
     const providerResponse =
@@ -1428,11 +1411,6 @@ export async function GET(
       providerResponse.headers.get(
         "content-length"
       );
-
-    /*
-     * Stream the provider response directly back to
-     * the browser.
-     */
 
     return new Response(
       providerResponse.body,

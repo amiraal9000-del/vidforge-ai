@@ -14,8 +14,7 @@ function SuccessContent() {
   const [synced, setSynced] = useState(false);
 
   useEffect(() => {
-    // ✅ Runs ONLY in browser — NEVER during build
-    const syncCredits = async () => {
+    const doSync = async () => {
       if (!added) {
         setSyncing(false);
         return;
@@ -29,15 +28,21 @@ function SuccessContent() {
 
         const { data: { session } } = await supabase.auth.getSession();
         
-        // ✅ Safe check — no crash if no user
-        if (!session || !session.user) {
-          toast.info('Please log in to see your updated balance');
+        // SAFE — no property access on null
+        if (!session) {
+          toast.info('Please log in to see updated balance');
+          setSyncing(false);
+          return;
+        }
+        if (!session.user) {
+          toast.info('Please log in to see updated balance');
           setSyncing(false);
           return;
         }
 
+        // ONLY now safely access properties
         const userId = session.user.id;
-        const creditsToAdd = parseInt(added);
+        const addAmount = parseInt(added);
 
         const { data: profile } = await supabase
           .from('profiles')
@@ -45,25 +50,24 @@ function SuccessContent() {
           .eq('id', userId)
           .single();
 
-        const currentCredits = profile?.credits ?? 0;
-        const newCredits = currentCredits + creditsToAdd;
+        const current = profile?.credits ?? 0;
 
         await supabase
           .from('profiles')
-          .update({ credits: newCredits })
+          .update({ credits: current + addAmount })
           .eq('id', userId);
 
         setSynced(true);
-        toast.success(`✅ +${creditsToAdd} credits added!`);
-      } catch (err) {
-        console.error('Sync error:', err);
-        toast.success('Payment confirmed! Refresh to see balance');
+        toast.success(`✅ +${addAmount} credits added!`);
+      } catch (e) {
+        console.error(e);
+        toast.success('Payment confirmed — refresh balance');
       } finally {
         setSyncing(false);
       }
     };
 
-    syncCredits();
+    doSync();
   }, [added]);
 
   return (

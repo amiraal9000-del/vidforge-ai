@@ -1,16 +1,14 @@
 'use client';
 import { useEffect, useState, Suspense } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import { CheckCircle, ArrowLeft, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import AppNavbar from '@/components/AppNavbar';
 
-// Separate component that uses useSearchParams — wrapped in Suspense
 function SuccessContent() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const added = searchParams.get('added');
   const [syncing, setSyncing] = useState(true);
   const [synced, setSynced] = useState(false);
@@ -29,6 +27,7 @@ function SuccessContent() {
 
       try {
         const { data: { session } } = await supabase.auth.getSession();
+        // ✅ Safely check — no crash if no session/user
         if (!session?.user) {
           toast.info('Please log in to see your updated balance');
           setSyncing(false);
@@ -103,7 +102,6 @@ function SuccessContent() {
   );
 }
 
-// Main page with Suspense boundary — fixes the build error
 export default function PaymentSuccessPage() {
   return (
     <div className="min-h-screen bg-zinc-950 text-white flex flex-col">

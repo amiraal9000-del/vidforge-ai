@@ -42,75 +42,112 @@ function sleep(ms: number) {
 
 /*
 |--------------------------------------------------------------------------
-| SCRIPT / SPEECH HELPERS
+| SCRIPT / SPEECH PARSER
 |--------------------------------------------------------------------------
 |
-| RULE:
+| ONLY text inside quotation marks is treated as spoken dialogue.
 |
-| Text inside:
+| Supported:
 |
-|   "spoken words"
+| "Hello there."
 |
-| OR:
+| “Hello there.”
 |
-|   “spoken words”
+| Multiple quoted sections are supported.
 |
-| is treated as spoken dialogue.
-|
-| Everything outside quotation marks is treated
-| as visual / acting / camera direction.
+| Everything outside quotation marks remains part of the
+| full visual / acting / camera prompt.
 |
 */
 
-function extractSpokenText(text: string): string {
-  if (!text.trim()) {
-    return "";
-  }
+function extractQuotedDialogue(text: string): {
+  spokenText: string;
+  hasUnmatchedQuote: boolean;
+} {
+  const segments: string[] = [];
 
-  const spokenParts: string[] = [];
+  let straightOpen = false;
+  let curlyOpen = false;
 
-  /*
-   * Supports both:
-   *
-   * "straight quotes"
-   *
-   * “curly quotes”
-   *
-   * Multiple quoted sections are supported.
-   */
+  let currentStraight = "";
+  let currentCurly = "";
 
-  const curlyMatches = text.matchAll(
-    /“([\s\S]*?)”/g
-  );
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
 
-  for (const match of curlyMatches) {
-    if (match[1]?.trim()) {
-      spokenParts.push(
-        match[1].trim()
-      );
+    /*
+     * Straight quotation mark
+     */
+    if (char === '"') {
+      if (straightOpen) {
+        if (currentStraight.trim()) {
+          segments.push(
+            currentStraight.trim()
+          );
+        }
+
+        currentStraight = "";
+        straightOpen = false;
+      } else {
+        straightOpen = true;
+        currentStraight = "";
+      }
+
+      continue;
+    }
+
+    /*
+     * Curly opening quotation mark
+     */
+    if (char === "“") {
+      if (!curlyOpen) {
+        curlyOpen = true;
+        currentCurly = "";
+      }
+
+      continue;
+    }
+
+    /*
+     * Curly closing quotation mark
+     */
+    if (char === "”") {
+      if (curlyOpen) {
+        if (currentCurly.trim()) {
+          segments.push(
+            currentCurly.trim()
+          );
+        }
+
+        currentCurly = "";
+        curlyOpen = false;
+      }
+
+      continue;
+    }
+
+    /*
+     * Collect text inside straight quotes.
+     */
+    if (straightOpen) {
+      currentStraight += char;
+    }
+
+    /*
+     * Collect text inside curly quotes.
+     */
+    if (curlyOpen) {
+      currentCurly += char;
     }
   }
 
-  /*
-   * Straight quotation marks.
-   *
-   * This intentionally ignores curly quotation
-   * sections because those were already extracted.
-   */
+  return {
+    spokenText:
+      segments.join(" ").trim(),
 
-  const straightMatches = text.matchAll(
-    /"([\s\S]*?)"/g
-  );
-
-  for (const match of straightMatches) {
-    if (match[1]?.trim()) {
-      spokenParts.push(
-        match[1].trim()
-      );
-    }
-  }
-
-  return spokenParts.join(" ").trim();
+    hasUnmatchedQuote:
+      straightOpen || curlyOpen,
+  };
 }
 
 function countWords(text: string): number {
@@ -139,64 +176,19 @@ function estimateSpeechSeconds(
    * Approximate natural speech:
    * 150 words per minute.
    */
-
   return Math.ceil(
     (words / 150) * 60
   );
-}
-
-function hasUnmatchedQuotation(
-  text: string
-): boolean {
-  /*
-   * Count straight quotes.
-   */
-
-  const straightCount =
-    (text.match(/"/g) || []).length;
-
-  /*
-   * Count curly opening / closing quotes.
-   */
-
-  const openingCurlyCount =
-    (text.match(/“/g) || []).length;
-
-  const closingCurlyCount =
-    (text.match(/”/g) || []).length;
-
-  /*
-   * An odd number of straight quotation
-   * marks means something was opened but
-   * not closed.
-   */
-
-  if (
-    straightCount % 2 !== 0
-  ) {
-    return true;
-  }
-
-  /*
-   * Curly quotation marks must be balanced.
-   */
-
-  if (
-    openingCurlyCount !==
-    closingCurlyCount
-  ) {
-    return true;
-  }
-
-  return false;
 }
 
 export default function GenerateScriptVideoPage() {
   const supabase = useMemo(
     () =>
       createBrowserClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        process.env
+          .NEXT_PUBLIC_SUPABASE_URL!,
+        process.env
+          .NEXT_PUBLIC_SUPABASE_ANON_KEY!
       ),
     []
   );
@@ -274,28 +266,37 @@ export default function GenerateScriptVideoPage() {
   */
 
   const fileInputRef =
-    useRef<HTMLInputElement | null>(null);
+    useRef<HTMLInputElement | null>(
+      null
+    );
 
   const videoObjectUrlRef =
     useRef<string | null>(null);
 
   const videoRef =
-    useRef<HTMLVideoElement | null>(null);
+    useRef<HTMLVideoElement | null>(
+      null
+    );
 
   /*
   |--------------------------------------------------------------------------
-  | DERIVED SCRIPT DATA
+  | PARSED SCRIPT DATA
   |--------------------------------------------------------------------------
   */
 
+  const parsedDialogue = useMemo(
+    () =>
+      extractQuotedDialogue(
+        prompt
+      ),
+    [prompt]
+  );
+
   const spokenText =
-    useMemo(
-      () =>
-        extractSpokenText(
-          prompt
-        ),
-      [prompt]
-    );
+    parsedDialogue.spokenText;
+
+  const unmatchedQuotation =
+    parsedDialogue.hasUnmatchedQuote;
 
   const totalWordCount =
     useMemo(
@@ -322,99 +323,83 @@ export default function GenerateScriptVideoPage() {
       [spokenText]
     );
 
-  const unmatchedQuotation =
-    useMemo(
-      () =>
-        hasUnmatchedQuotation(
-          prompt
-        ),
-      [prompt]
-    );
-
   /*
   |--------------------------------------------------------------------------
   | SCRIPT VALIDATION
   |--------------------------------------------------------------------------
   */
 
-  /*
-   * Speech is too long only when the
-   * actual quoted dialogue is too long.
-   */
-
   const scriptTooLong =
     withAudio &&
     spokenWordCount > 0 &&
     estimatedSeconds > duration;
 
-  /*
-   * If audio is ON, we require actual
-   * quoted speech.
-   */
-
   const missingSpokenDialogue =
     withAudio &&
     prompt.trim().length > 0 &&
-    spokenWordCount === 0;
-
-  /*
-   * A quotation was opened but not closed.
-   */
+    spokenText.trim().length === 0;
 
   const quotationError =
     prompt.trim().length > 0 &&
     unmatchedQuotation;
 
   /*
-   |--------------------------------------------------------------------------
-   | LOAD USER
-   |--------------------------------------------------------------------------
-   */
+  |--------------------------------------------------------------------------
+  | LOAD USER
+  |--------------------------------------------------------------------------
+  */
 
   useEffect(() => {
     let mounted = true;
 
-    const loadUser = async () => {
-      const {
-        data: { user },
-      } =
-        await supabase.auth.getUser();
+    const loadUser =
+      async () => {
+        const {
+          data: {
+            user,
+          },
+        } =
+          await supabase.auth.getUser();
 
-      if (!mounted) {
-        return;
-      }
+        if (!mounted) {
+          return;
+        }
 
-      setUser(user);
+        setUser(user);
 
-      if (!user) {
-        return;
-      }
+        if (!user) {
+          return;
+        }
 
-      const {
-        data: profile,
-        error,
-      } =
-        await supabase
-          .from("profiles")
-          .select("credits")
-          .eq("id", user.id)
-          .single();
+        const {
+          data: profile,
+          error,
+        } =
+          await supabase
+            .from("profiles")
+            .select("credits")
+            .eq(
+              "id",
+              user.id
+            )
+            .single();
 
-      if (!mounted) {
-        return;
-      }
+        if (!mounted) {
+          return;
+        }
 
-      if (
-        !error &&
-        profile
-      ) {
-        setCredits(
-          Number(
-            profile.credits ?? 0
-          )
-        );
-      }
-    };
+        if (
+          !error &&
+          profile
+        ) {
+          setCredits(
+            Number(
+              profile.credits ??
+                0
+            )
+          );
+        }
+      };
 
     loadUser();
 
@@ -514,21 +499,24 @@ export default function GenerateScriptVideoPage() {
   |--------------------------------------------------------------------------
   */
 
-  const getAccessToken = async () => {
-    const {
-      data: { session },
-    } =
-      await supabase.auth.getSession();
+  const getAccessToken =
+    async () => {
+      const {
+        data: {
+          session,
+        },
+      } =
+        await supabase.auth.getSession();
 
-    return (
-      session?.access_token ??
-      null
-    );
-  };
+      return (
+        session?.access_token ??
+        null
+      );
+    };
 
   /*
   |--------------------------------------------------------------------------
-  | SCRIPT VALIDATION MESSAGE
+  | VALIDATION MESSAGE
   |--------------------------------------------------------------------------
   */
 
@@ -681,6 +669,16 @@ export default function GenerateScriptVideoPage() {
         return;
       }
 
+      if (
+        credits !== null &&
+        credits < currentCost
+      ) {
+        toast.error(
+          `You need ${currentCost} credits to create this video.`
+        );
+        return;
+      }
+
       const token =
         await getAccessToken();
 
@@ -693,7 +691,7 @@ export default function GenerateScriptVideoPage() {
 
       try {
         /*
-         * Reset only the previous preview.
+         * Reset previous preview.
          */
 
         if (
@@ -720,7 +718,7 @@ export default function GenerateScriptVideoPage() {
         );
 
         /*
-         * Build multipart request.
+         * Multipart request.
          */
 
         const formData =
@@ -729,7 +727,7 @@ export default function GenerateScriptVideoPage() {
         /*
          * FULL SCRIPT
          *
-         * This contains:
+         * Contains:
          * - scene direction
          * - camera direction
          * - acting direction
@@ -742,10 +740,10 @@ export default function GenerateScriptVideoPage() {
         );
 
         /*
-         * SPOKEN TEXT
+         * SPOKEN DIALOGUE
          *
-         * This contains ONLY the
-         * content inside quotation marks.
+         * Contains ONLY words inside
+         * quotation marks.
          */
 
         formData.append(
@@ -810,7 +808,7 @@ export default function GenerateScriptVideoPage() {
         }
 
         /*
-         * Provider job successfully started.
+         * Provider job started.
          */
 
         setJobId(
@@ -829,10 +827,6 @@ export default function GenerateScriptVideoPage() {
         setGenerationStatus(
           "Veo is creating your video..."
         );
-
-        /*
-         * Wait for actual completed video.
-         */
 
         await pollForVideo(
           data.jobId
@@ -921,7 +915,7 @@ export default function GenerateScriptVideoPage() {
         }
 
         /*
-         * Keep credit balance synchronized.
+         * Keep credits synchronized.
          */
 
         if (
@@ -970,16 +964,12 @@ export default function GenerateScriptVideoPage() {
           );
 
           /*
-           * Retrieve actual MP4.
+           * Retrieve the actual MP4.
            */
 
           await downloadVideo(
             data.videoUrl
           );
-
-          /*
-           * Keep finished video on screen.
-           */
 
           setGenerationStatus(
             "Your video is ready."
@@ -1205,7 +1195,6 @@ export default function GenerateScriptVideoPage() {
             .catch(() => {
               /*
                * Browser may block autoplay.
-               * This is not generation failure.
                */
             });
         } catch {
@@ -1319,10 +1308,6 @@ export default function GenerateScriptVideoPage() {
         null
       );
 
-      /*
-       * Allow selecting same file again.
-       */
-
       if (
         fileInputRef.current
       ) {
@@ -1363,10 +1348,6 @@ export default function GenerateScriptVideoPage() {
             <div className="mb-2 flex items-center gap-2">
 
               <div className="h-2 w-2 rounded-full bg-purple-500" />
-
-              <span className="text-sm font-medium text-purple-300">
-                
-              </span>
 
             </div>
 
@@ -1419,12 +1400,8 @@ export default function GenerateScriptVideoPage() {
                   <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
 
                     <video
-                      ref={
-                        videoRef
-                      }
-                      src={
-                        videoUrl
-                      }
+                      ref={videoRef}
+                      src={videoUrl}
                       controls
                       autoPlay
                       playsInline
@@ -1535,7 +1512,7 @@ export default function GenerateScriptVideoPage() {
 
                     <p className="mt-2 text-sm leading-6 text-white/50">
                       Use a clear photo of the person
-                      or character you want  to animate.
+                      or character you want to animate.
                     </p>
 
                   </div>
@@ -1730,6 +1707,7 @@ A confident woman looks directly into the camera and smiles warmly. The camera s
                       Make sure every spoken section has
                       both an opening and closing quotation
                       mark.
+
                     </div>
 
                   )}
@@ -2009,6 +1987,14 @@ A confident woman looks directly into the camera and smiles warmly. The camera s
                         Review & Create Video
                       </button>
 
+                      {scriptValidationMessage && (
+
+                        <p className="mt-3 text-center text-[11px] leading-5 text-red-300/80">
+                          {scriptValidationMessage}
+                        </p>
+
+                      )}
+
                       <p className="mt-3 text-center text-[11px] leading-5 text-white/35">
                         Your image and script will be
                         securely processed by VidForge AI.
@@ -2080,7 +2066,7 @@ A confident woman looks directly into the camera and smiles warmly. The camera s
                 <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
 
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/30">
-                    Script
+                    Full script
                   </p>
 
                   <p className="whitespace-pre-wrap text-sm leading-6 text-white/80">
@@ -2114,7 +2100,9 @@ A confident woman looks directly into the camera and smiles warmly. The camera s
                   <p className="mt-2 text-xs text-white/35">
                     {spokenWordCount} spoken words
                     {" • "}
-                    ~{estimatedSeconds}s estimated speech
+                    {withAudio
+                      ? `~${estimatedSeconds}s estimated speech`
+                      : "Audio off"}
                   </p>
 
                 </div>
@@ -2192,7 +2180,17 @@ A confident woman looks directly into the camera and smiles warmly. The camera s
 
                       startGeneration();
                     }}
-                    className="rounded-2xl bg-white px-4 py-4 text-sm font-bold text-black transition hover:bg-white/90"
+                    disabled={
+                      quotationError ||
+                      missingSpokenDialogue ||
+                      scriptTooLong ||
+                      !image ||
+                      !prompt.trim() ||
+                      (credits !== null &&
+                        credits <
+                          currentCost)
+                    }
+                    className="rounded-2xl bg-white px-4 py-4 text-sm font-bold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Create Video
                   </button>

@@ -9,7 +9,7 @@ export async function GET() {
   try {
     /*
      * ---------------------------------------------------------
-     * 1. Get the currently authenticated Supabase user
+     * 1. GET CURRENTLY AUTHENTICATED USER
      * ---------------------------------------------------------
      */
 
@@ -23,15 +23,20 @@ export async function GET() {
           getAll() {
             return cookieStore.getAll();
           },
+
           setAll(cookiesToSet) {
             try {
               cookiesToSet.forEach(
                 ({ name, value, options }) => {
-                  cookieStore.set(name, value, options);
+                  cookieStore.set(
+                    name,
+                    value,
+                    options
+                  );
                 }
               );
             } catch {
-              // Cookie writes are not required for this read-only request.
+              // Read-only request.
             }
           },
         },
@@ -56,7 +61,7 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 2. Verify this is the designated administrator
+     * 2. VERIFY ADMIN
      * ---------------------------------------------------------
      */
 
@@ -76,12 +81,7 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 3. Create a server-side Supabase admin client
-     *
-     * SERVICE ROLE bypasses RLS.
-     *
-     * IMPORTANT:
-     * This key never goes to the browser.
+     * 3. SERVICE-ROLE ADMIN CLIENT
      * ---------------------------------------------------------
      */
 
@@ -125,7 +125,7 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 5. ALL PROFILE CREDITS
+     * 5. TOTAL CREDITS CURRENTLY HELD BY USERS
      * ---------------------------------------------------------
      */
 
@@ -156,7 +156,7 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 6. TOTAL VIDEOS
+     * 6. TOTAL VIDEOS GENERATED
      * ---------------------------------------------------------
      */
 
@@ -183,7 +183,7 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 7. VIDEO COST / CREDITS SPENT
+     * 7. TOTAL CREDITS SPENT ON GENERATIONS
      * ---------------------------------------------------------
      */
 
@@ -214,17 +214,22 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 8. SUCCESSFUL DEPOSITS
+     * 8. TOTAL WALLET REVENUE
+     *
+     * IMPORTANT:
+     * wallet_deposits now contains ONLY verified/paid deposits.
+     *
+     * There is no pending or successful filter anymore.
+     * Every row represents money received.
      * ---------------------------------------------------------
      */
 
     const {
-      data: successfulDeposits,
+      data: deposits,
       error: depositsError,
     } = await supabaseAdmin
       .from('wallet_deposits')
-      .select('amount')
-      .eq('status', 'successful');
+      .select('amount');
 
     if (depositsError) {
       console.error(
@@ -233,12 +238,12 @@ export async function GET() {
       );
 
       throw new Error(
-        'Unable to read deposit statistics.'
+        'Unable to read revenue statistics.'
       );
     }
 
     const totalRevenue =
-      successfulDeposits?.reduce(
+      deposits?.reduce(
         (sum, deposit) =>
           sum + Number(deposit.amount || 0),
         0
@@ -246,63 +251,36 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 9. SUCCESSFUL DEPOSIT COUNT
+     * 9. TOTAL PAID DEPOSITS
+     *
+     * Every row in wallet_deposits is now a paid deposit.
      * ---------------------------------------------------------
      */
 
     const {
-      count: successfulDepositCount,
-      error: successfulCountError,
+      count: totalDeposits,
+      error: depositCountError,
     } = await supabaseAdmin
       .from('wallet_deposits')
       .select('*', {
         count: 'exact',
         head: true,
-      })
-      .eq('status', 'successful');
+      });
 
-    if (successfulCountError) {
+    if (depositCountError) {
       console.error(
-        'Successful deposit count error:',
-        successfulCountError
+        'Deposit count error:',
+        depositCountError
       );
 
       throw new Error(
-        'Unable to count successful deposits.'
+        'Unable to count wallet deposits.'
       );
     }
 
     /*
      * ---------------------------------------------------------
-     * 10. PENDING DEPOSITS
-     * ---------------------------------------------------------
-     */
-
-    const {
-      count: pendingDeposits,
-      error: pendingError,
-    } = await supabaseAdmin
-      .from('wallet_deposits')
-      .select('*', {
-        count: 'exact',
-        head: true,
-      })
-      .eq('status', 'pending');
-
-    if (pendingError) {
-      console.error(
-        'Pending deposit query error:',
-        pendingError
-      );
-
-      throw new Error(
-        'Unable to count pending deposits.'
-      );
-    }
-
-    /*
-     * ---------------------------------------------------------
-     * 11. RETURN ADMIN STATISTICS
+     * 10. RETURN ADMIN STATISTICS
      * ---------------------------------------------------------
      */
 
@@ -310,9 +288,11 @@ export async function GET() {
       success: true,
 
       stats: {
-        totalUsers: totalUsers || 0,
+        totalUsers:
+          totalUsers || 0,
 
-        totalVideos: totalVideos || 0,
+        totalVideos:
+          totalVideos || 0,
 
         totalCredits,
 
@@ -320,13 +300,11 @@ export async function GET() {
 
         totalRevenue,
 
-        successfulDeposits:
-          successfulDepositCount || 0,
-
-        pendingDeposits:
-          pendingDeposits || 0,
+        totalDeposits:
+          totalDeposits || 0,
       },
     });
+
   } catch (error: any) {
     console.error(
       'Admin stats API error:',

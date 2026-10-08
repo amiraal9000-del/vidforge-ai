@@ -7,8 +7,6 @@ import {
   RefreshCw,
   Search,
   CheckCircle,
-  Clock,
-  AlertCircle,
   TrendingUp,
 } from 'lucide-react';
 
@@ -28,23 +26,18 @@ type Deposit = {
 
 type DepositSummary = {
   totalDeposits: number;
-  paidDeposits: number;
-  pendingDeposits: number;
-  paidRevenue: number;
-  pendingRevenue: number;
+  totalRevenue: number;
 };
 
 export default function AdminDepositsPage() {
   const router = useRouter();
 
   const [deposits, setDeposits] = useState<Deposit[]>([]);
+
   const [summary, setSummary] =
     useState<DepositSummary>({
       totalDeposits: 0,
-      paidDeposits: 0,
-      pendingDeposits: 0,
-      paidRevenue: 0,
-      pendingRevenue: 0,
+      totalRevenue: 0,
     });
 
   const [loading, setLoading] = useState(true);
@@ -53,8 +46,6 @@ export default function AdminDepositsPage() {
 
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] =
-    useState('all');
 
   const loadDeposits = async () => {
     try {
@@ -94,10 +85,7 @@ export default function AdminDepositsPage() {
       setSummary(
         data?.summary || {
           totalDeposits: 0,
-          paidDeposits: 0,
-          pendingDeposits: 0,
-          paidRevenue: 0,
-          pendingRevenue: 0,
+          totalRevenue: 0,
         }
       );
     } catch (err: any) {
@@ -129,9 +117,12 @@ export default function AdminDepositsPage() {
     const query =
       search.trim().toLowerCase();
 
+    if (!query) {
+      return deposits;
+    }
+
     return deposits.filter((deposit) => {
-      const matchesSearch =
-        !query ||
+      return (
         String(
           deposit.email || ''
         )
@@ -141,28 +132,10 @@ export default function AdminDepositsPage() {
           deposit.tx_ref || ''
         )
           .toLowerCase()
-          .includes(query);
-
-      const normalizedStatus =
-        String(
-          deposit.status || ''
-        ).toLowerCase();
-
-      const matchesStatus =
-        statusFilter === 'all' ||
-        normalizedStatus ===
-          statusFilter;
-
-      return (
-        matchesSearch &&
-        matchesStatus
+          .includes(query)
       );
     });
-  }, [
-    deposits,
-    search,
-    statusFilter,
-  ]);
+  }, [deposits, search]);
 
   const formatNaira = (
     amount: number,
@@ -204,49 +177,6 @@ export default function AdminDepositsPage() {
     });
   };
 
-  const getStatusStyle = (
-    status: string
-  ) => {
-    const normalized =
-      String(
-        status || ''
-      ).toLowerCase();
-
-    if (
-      normalized === 'paid' ||
-      normalized === 'successful' ||
-      normalized === 'completed'
-    ) {
-      return {
-        className:
-          'bg-emerald-500/10 border-emerald-500/20 text-emerald-400',
-        icon: (
-          <CheckCircle size={14} />
-        ),
-      };
-    }
-
-    if (
-      normalized === 'pending'
-    ) {
-      return {
-        className:
-          'bg-yellow-500/10 border-yellow-500/20 text-yellow-400',
-        icon: (
-          <Clock size={14} />
-        ),
-      };
-    }
-
-    return {
-      className:
-        'bg-red-500/10 border-red-500/20 text-red-400',
-      icon: (
-        <AlertCircle size={14} />
-      ),
-    };
-  };
-
   if (loading) {
     return (
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
@@ -284,8 +214,8 @@ export default function AdminDepositsPage() {
           </div>
 
           <p className="text-zinc-500 mt-2">
-            Monitor wallet payments and actual
-            deposit statuses.
+            Monitor verified wallet payments and
+            business revenue.
           </p>
         </div>
 
@@ -323,97 +253,47 @@ export default function AdminDepositsPage() {
       )}
 
       {/* Summary */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-6">
+      <section className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-6">
         <SummaryCard
-          title="Paid Revenue"
+          title="Total Revenue"
           value={formatNaira(
-            summary.paidRevenue
+            summary.totalRevenue
           )}
-          description="Confirmed paid deposits"
+          description="Total verified wallet deposits"
           icon={
             <TrendingUp size={21} />
           }
         />
 
         <SummaryCard
-          title="Paid Deposits"
-          value={summary.paidDeposits.toLocaleString()}
-          description="Successfully processed"
+          title="Total Deposits"
+          value={summary.totalDeposits.toLocaleString()}
+          description="Verified wallet payments"
           icon={
             <CheckCircle size={21} />
           }
         />
-
-        <SummaryCard
-          title="Pending Deposits"
-          value={summary.pendingDeposits.toLocaleString()}
-          description="Awaiting confirmation"
-          icon={<Clock size={21} />}
-        />
-
-        <SummaryCard
-          title="Pending Value"
-          value={formatNaira(
-            summary.pendingRevenue
-          )}
-          description="Value still pending"
-          icon={
-            <Wallet size={21} />
-          }
-        />
       </section>
 
-      {/* Search + filters */}
+      {/* Search */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-6">
-        <div className="flex flex-col lg:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search
-              size={18}
-              className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500"
-            />
+        <div className="relative">
+          <Search
+            size={18}
+            className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500"
+          />
 
-            <input
-              type="text"
-              value={search}
-              onChange={(e) =>
-                setSearch(
-                  e.target.value
-                )
-              }
-              placeholder="Search by email or transaction reference..."
-              className="w-full pl-11 pr-4 py-3 bg-zinc-950 border border-zinc-800 rounded-xl text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-purple-500/50"
-            />
-          </div>
-
-          <select
-            value={statusFilter}
+          <input
+            type="text"
+            value={search}
             onChange={(e) =>
-              setStatusFilter(
+              setSearch(
                 e.target.value
               )
             }
-            className="lg:w-52 px-4 py-3 bg-zinc-950 border border-zinc-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-purple-500/50"
-          >
-            <option value="all">
-              All statuses
-            </option>
-
-            <option value="paid">
-              Paid
-            </option>
-
-            <option value="pending">
-              Pending
-            </option>
-
-            <option value="failed">
-              Failed
-            </option>
-
-            <option value="cancelled">
-              Cancelled
-            </option>
-          </select>
+            placeholder="Search by email or transaction reference..."
+            className="w-full pl-11 pr-4 py-3 bg-zinc-950 border border-zinc-800 rounded-xl text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+          />
         </div>
       </section>
 
@@ -432,7 +312,7 @@ export default function AdminDepositsPage() {
                 </th>
 
                 <th className="text-left px-5 py-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                  Status
+                  Payment
                 </th>
 
                 <th className="text-left px-5 py-4 text-xs font-semibold uppercase tracking-wider text-zinc-500">
@@ -457,83 +337,71 @@ export default function AdminDepositsPage() {
                     colSpan={6}
                     className="px-5 py-16 text-center text-zinc-500"
                   >
-                    {search ||
-                    statusFilter !==
-                      'all'
-                      ? 'No deposits match your filters.'
+                    {search
+                      ? 'No deposits match your search.'
                       : 'No deposits found.'}
                   </td>
                 </tr>
               ) : (
                 filteredDeposits.map(
-                  (deposit) => {
-                    const statusStyle =
-                      getStatusStyle(
-                        deposit.status
-                      );
-
-                    return (
-                      <tr
-                        key={
-                          deposit.id
-                        }
-                        className="border-b border-zinc-800/70 last:border-b-0 hover:bg-zinc-800/30 transition"
-                      >
-                        <td className="px-5 py-4">
-                          <div className="min-w-[190px]">
-                            <p className="text-sm font-medium text-white break-all">
-                              {deposit.email ||
-                                'Unknown user'}
-                            </p>
-
-                            <p className="text-xs text-zinc-600 mt-1 font-mono">
-                              {deposit.user_id}
-                            </p>
-                          </div>
-                        </td>
-
-                        <td className="px-5 py-4 whitespace-nowrap">
-                          <p className="text-sm font-semibold text-white">
-                            {formatNaira(
-                              deposit.amount,
-                              deposit.currency
-                            )}
+                  (deposit) => (
+                    <tr
+                      key={deposit.id}
+                      className="border-b border-zinc-800/70 last:border-b-0 hover:bg-zinc-800/30 transition"
+                    >
+                      <td className="px-5 py-4">
+                        <div className="min-w-[190px]">
+                          <p className="text-sm font-medium text-white break-all">
+                            {deposit.email ||
+                              'Unknown user'}
                           </p>
-                        </td>
 
-                        <td className="px-5 py-4">
-                          <span
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium ${statusStyle.className}`}
-                          >
-                            {statusStyle.icon}
-                            {deposit.status ||
-                              'unknown'}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <p className="text-xs text-zinc-300 font-mono whitespace-nowrap">
-                            {deposit.tx_ref}
+                          <p className="text-xs text-zinc-600 mt-1 font-mono">
+                            {deposit.user_id}
                           </p>
-                        </td>
+                        </div>
+                      </td>
 
-                        <td className="px-5 py-4">
-                          <span className="text-sm text-zinc-400 capitalize">
-                            {deposit.payment_provider ||
-                              '—'}
-                          </span>
-                        </td>
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        <p className="text-sm font-semibold text-white">
+                          {formatNaira(
+                            deposit.amount,
+                            deposit.currency
+                          )}
+                        </p>
+                      </td>
 
-                        <td className="px-5 py-4 text-right whitespace-nowrap">
-                          <span className="text-sm text-zinc-500">
-                            {formatDate(
-                              deposit.created_at
-                            )}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  }
+                      <td className="px-5 py-4">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-emerald-500/10 border-emerald-500/20 text-emerald-400 text-xs font-medium">
+                          <CheckCircle
+                            size={14}
+                          />
+                          Paid
+                        </span>
+                      </td>
+
+                      <td className="px-5 py-4">
+                        <p className="text-xs text-zinc-300 font-mono whitespace-nowrap">
+                          {deposit.tx_ref}
+                        </p>
+                      </td>
+
+                      <td className="px-5 py-4">
+                        <span className="text-sm text-zinc-400 capitalize">
+                          {deposit.payment_provider ||
+                            '—'}
+                        </span>
+                      </td>
+
+                      <td className="px-5 py-4 text-right whitespace-nowrap">
+                        <span className="text-sm text-zinc-500">
+                          {formatDate(
+                            deposit.created_at
+                          )}
+                        </span>
+                      </td>
+                    </tr>
+                  )
                 )
               )}
             </tbody>
@@ -546,74 +414,64 @@ export default function AdminDepositsPage() {
         {filteredDeposits.length ===
         0 ? (
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl px-5 py-16 text-center text-zinc-500">
-            {search ||
-            statusFilter !==
-              'all'
-              ? 'No deposits match your filters.'
+            {search
+              ? 'No deposits match your search.'
               : 'No deposits found.'}
           </div>
         ) : (
           filteredDeposits.map(
-            (deposit) => {
-              const statusStyle =
-                getStatusStyle(
-                  deposit.status
-                );
+            (deposit) => (
+              <div
+                key={deposit.id}
+                className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-white break-all">
+                      {deposit.email ||
+                        'Unknown user'}
+                    </p>
 
-              return (
-                <div
-                  key={deposit.id}
-                  className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-white break-all">
-                        {deposit.email ||
-                          'Unknown user'}
-                      </p>
-
-                      <p className="text-xs text-zinc-600 mt-1 font-mono break-all">
-                        {deposit.tx_ref}
-                      </p>
-                    </div>
-
-                    <span
-                      className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium ${statusStyle.className}`}
-                    >
-                      {statusStyle.icon}
-                      {deposit.status ||
-                        'unknown'}
-                    </span>
-                  </div>
-
-                  <div className="mt-5">
-                    <p className="text-2xl font-bold text-white">
-                      {formatNaira(
-                        deposit.amount,
-                        deposit.currency
-                      )}
+                    <p className="text-xs text-zinc-600 mt-1 font-mono break-all">
+                      {deposit.tx_ref}
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3 mt-5">
-                    <MobileInfo
-                      label="Provider"
-                      value={
-                        deposit.payment_provider ||
-                        '—'
-                      }
+                  <span className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-emerald-500/10 border-emerald-500/20 text-emerald-400 text-xs font-medium">
+                    <CheckCircle
+                      size={14}
                     />
-
-                    <MobileInfo
-                      label="Date"
-                      value={formatDate(
-                        deposit.created_at
-                      )}
-                    />
-                  </div>
+                    Paid
+                  </span>
                 </div>
-              );
-            }
+
+                <div className="mt-5">
+                  <p className="text-2xl font-bold text-white">
+                    {formatNaira(
+                      deposit.amount,
+                      deposit.currency
+                    )}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mt-5">
+                  <MobileInfo
+                    label="Provider"
+                    value={
+                      deposit.payment_provider ||
+                      '—'
+                    }
+                  />
+
+                  <MobileInfo
+                    label="Date"
+                    value={formatDate(
+                      deposit.created_at
+                    )}
+                  />
+                </div>
+              </div>
+            )
           )
         )}
       </div>
@@ -628,8 +486,8 @@ export default function AdminDepositsPage() {
         </p>
 
         <p className="text-xs text-zinc-600">
-          Paid revenue is calculated only from
-          deposits marked <strong>paid</strong>.
+          All deposits shown here represent
+          verified payments.
         </p>
       </div>
     </main>

@@ -38,9 +38,10 @@ export async function POST(request: Request) {
       );
     }
 
-    /*
-     * Authenticate the currently logged-in VidForge user.
-     */
+    // --------------------------------------------------
+    // AUTHENTICATE CURRENT USER
+    // --------------------------------------------------
+
     const cookieStore = await cookies();
 
     const supabaseAuth = createServerClient(
@@ -82,9 +83,10 @@ export async function POST(request: Request) {
       );
     }
 
-    /*
-     * Verify the transaction directly with Flutterwave.
-     */
+    // --------------------------------------------------
+    // VERIFY PAYMENT WITH FLUTTERWAVE
+    // --------------------------------------------------
+
     let verifyUrl = '';
 
     if (transaction_id) {
@@ -92,11 +94,6 @@ export async function POST(request: Request) {
         `https://api.flutterwave.com/v3/transactions/` +
         `${encodeURIComponent(transaction_id)}/verify`;
     } else {
-      /*
-       * Flutterwave's primary verification endpoint uses
-       * transaction_id, so when only tx_ref is available,
-       * first locate the transaction.
-       */
       verifyUrl =
         `https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=` +
         `${encodeURIComponent(tx_ref)}`;
@@ -140,9 +137,10 @@ export async function POST(request: Request) {
     const transaction =
       flutterwaveData.data;
 
-    /*
-     * Flutterwave must report a successful transaction.
-     */
+    // --------------------------------------------------
+    // PAYMENT MUST ACTUALLY BE SUCCESSFUL
+    // --------------------------------------------------
+
     if (
       String(transaction.status || '').toLowerCase() !==
       'successful'
@@ -158,9 +156,10 @@ export async function POST(request: Request) {
       );
     }
 
-    /*
-     * The reference returned by Flutterwave.
-     */
+    // --------------------------------------------------
+    // GET VERIFIED TRANSACTION REFERENCE
+    // --------------------------------------------------
+
     const verifiedTxRef =
       transaction.tx_ref || tx_ref;
 
@@ -174,48 +173,18 @@ export async function POST(request: Request) {
       );
     }
 
-    /*
-     * Find the corresponding VidForge deposit.
-     */
-    const {
-      data: deposit,
-      error: depositError,
-    } = await supabaseAdmin
-      .from('wallet_deposits')
-      .select('*')
-      .eq('tx_ref', verifiedTxRef)
-      .maybeSingle();
+    // --------------------------------------------------
+    // SECURITY:
+    // TRANSACTION MUST BELONG TO THIS USER
+    // --------------------------------------------------
 
-    if (depositError) {
-      console.error(
-        'Deposit lookup error:',
-        depositError
-      );
+    const transactionUserId =
+      transaction?.meta?.user_id;
 
-      return NextResponse.json(
-        {
-          error:
-            'Unable to find the VidForge deposit.',
-        },
-        { status: 500 }
-      );
-    }
-
-    if (!deposit) {
-      return NextResponse.json(
-        {
-          error:
-            'No matching VidForge deposit was found.',
-        },
-        { status: 404 }
-      );
-    }
-
-    /*
-     * Security check:
-     * The deposit must belong to the logged-in user.
-     */
-    if (deposit.user_id !== user.id) {
+    if (
+      transactionUserId &&
+      transactionUserId !== user.id
+    ) {
       return NextResponse.json(
         {
           error:
@@ -226,62 +195,112 @@ export async function POST(request: Request) {
     }
 
     /*
-     * Security check:
-     * Currency must match what VidForge expects.
+     * Our transaction references are created as:
+     *
+     * DEP_USER_ID_TIMESTAMP
+     *
+     * Verify the reference itself belongs to the
+     * currently authenticated user.
      */
+    const expectedPrefix =
+      `DEP_${user.id}_`;
+
+    if (
+      !verifiedTxRef.startsWith(expectedPrefix)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'This payment reference does not belong to the current user.',
+        },
+        { status: 403 }
+      );
+    }
+
+    // --------------------------------------------------
+    // VERIFY CURRENCY
+    // --------------------------------------------------
+
     const verifiedCurrency =
       String(
         transaction.currency || ''
       ).toUpperCase();
 
-    const depositCurrency =
-      String(
-        deposit.currency || 'NGN'
-      ).toUpperCase();
-
-    if (
-      verifiedCurrency !== depositCurrency
-    ) {
+    if (verifiedCurrency !== 'NGN') {
       return NextResponse.json(
         {
           error:
-            'Payment currency does not match the deposit.',
+            'Payment currency does not match NGN.',
         },
         { status: 400 }
       );
     }
 
-    /*
-     * Security check:
-     * The amount paid must match the amount requested.
-     */
+    // --------------------------------------------------
+    // GET VERIFIED AMOUNT
+    // --------------------------------------------------
+
     const verifiedAmount =
       Number(transaction.amount || 0);
 
-    const depositAmount =
-      Number(deposit.amount || 0);
-
     if (
       !Number.isFinite(verifiedAmount) ||
-      !Number.isFinite(depositAmount) ||
-      verifiedAmount < depositAmount
+      verifiedAmount <= 0
     ) {
       return NextResponse.json(
         {
           error:
-            'Payment amount does not match the deposit.',
+            'Flutterwave returned an invalid payment amount.',
         },
         { status: 400 }
       );
     }
 
+    // --------------------------------------------------
+    // PREVENT DOUBLE PROCESSING
+    // --------------------------------------------------
+
+    const {
+      data: existingDeposit,
+      error: existingDepositError,
+    } = await supabaseAdmin
+      .from('wallet_deposits')
+      .select('*')
+      .eq('tx_ref', verifiedTxRef)
+      .maybeSingle();
+
+    if (existingDepositError) {
+      console.error(
+        'Existing deposit lookup error:',
+        existingDepositError
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            'Unable to check payment history.',
+        },
+        { status: 500 }
+      );
+    }
+
     /*
-     * If this deposit was already paid, do NOT add credits again.
+     * If the transaction was already recorded,
+     * do NOT add credits again.
      */
-    if (
-      String(deposit.status || '').toLowerCase() ===
-      'paid'
-    ) {
+    if (existingDeposit) {
+      if (
+        existingDeposit.user_id !== user.id
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              'This payment does not belong to the current user.',
+          },
+          { status: 403 }
+        );
+      }
+
       const {
         data: existingProfile,
       } = await supabaseAdmin
@@ -295,9 +314,9 @@ export async function POST(request: Request) {
         already_processed: true,
         status: 'paid',
         tx_ref: verifiedTxRef,
-        amount: depositAmount,
+        amount: Number(existingDeposit.amount),
         credits_added: Math.floor(
-          depositAmount / 10
+          Number(existingDeposit.amount) / 10
         ),
         credits:
           Number(
@@ -306,90 +325,33 @@ export async function POST(request: Request) {
       });
     }
 
+    // --------------------------------------------------
+    // CALCULATE CREDITS
+    // --------------------------------------------------
+
     /*
-     * Credits are currently priced at:
-     * ₦10 = 1 credit.
+     * Current pricing:
+     *
+     * ₦10 = 1 credit
      */
     const creditsToAdd = Math.floor(
-      depositAmount / 10
+      verifiedAmount / 10
     );
 
     if (creditsToAdd <= 0) {
       return NextResponse.json(
         {
           error:
-            'This deposit does not provide any credits.',
+            'This payment does not provide any credits.',
         },
         { status: 400 }
       );
     }
 
-    /*
-     * Mark the deposit as PAID.
-     *
-     * The status condition prevents a second request
-     * from processing the same pending deposit after
-     * another request has already completed it.
-     */
-    const {
-      data: updatedDeposit,
-      error: updateDepositError,
-    } = await supabaseAdmin
-      .from('wallet_deposits')
-      .update({
-        status: 'paid',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', deposit.id)
-      .eq('status', 'pending')
-      .select()
-      .maybeSingle();
+    // --------------------------------------------------
+    // MAKE SURE PROFILE EXISTS
+    // --------------------------------------------------
 
-    if (updateDepositError) {
-      console.error(
-        'Deposit status update error:',
-        updateDepositError
-      );
-
-      return NextResponse.json(
-        {
-          error:
-            'Unable to update deposit status.',
-        },
-        { status: 500 }
-      );
-    }
-
-    /*
-     * If another request already processed it,
-     * don't add the credits a second time.
-     */
-    if (!updatedDeposit) {
-      const {
-        data: existingProfile,
-      } = await supabaseAdmin
-        .from('profiles')
-        .select('credits')
-        .eq('id', user.id)
-        .maybeSingle();
-
-      return NextResponse.json({
-        success: true,
-        already_processed: true,
-        status: 'paid',
-        tx_ref: verifiedTxRef,
-        amount: depositAmount,
-        credits_added: creditsToAdd,
-        credits:
-          Number(
-            existingProfile?.credits || 0
-          ),
-      });
-    }
-
-    /*
-     * Read the current credit balance.
-     */
     const {
       data: profile,
       error: profileError,
@@ -399,27 +361,121 @@ export async function POST(request: Request) {
       .eq('id', user.id)
       .maybeSingle();
 
-    if (profileError || !profile) {
+    if (profileError) {
       console.error(
         'Profile lookup error:',
         profileError
       );
 
-      /*
-       * We do NOT silently pretend the payment failed.
-       * The deposit is already marked paid, so report the
-       * issue clearly for investigation.
-       */
       return NextResponse.json(
         {
           error:
-            'Payment was marked paid, but the user profile could not be updated.',
-          payment_processed: true,
+            'Unable to load your credit balance.',
+        },
+        { status: 500 }
+      );
+    }
+
+    if (!profile) {
+      return NextResponse.json(
+        {
+          error:
+            'Your VidForge profile could not be found.',
+        },
+        { status: 500 }
+      );
+    }
+
+    // --------------------------------------------------
+    // CREATE PAID WALLET DEPOSIT
+    // --------------------------------------------------
+
+    const {
+      data: newDeposit,
+      error: depositInsertError,
+    } = await supabaseAdmin
+      .from('wallet_deposits')
+      .insert({
+        user_id: user.id,
+        tx_ref: verifiedTxRef,
+        amount: verifiedAmount,
+        currency: 'NGN',
+        payment_provider: 'flutterwave',
+        status: 'paid',
+        payment_link: null,
+        updated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (depositInsertError) {
+      /*
+       * If another request processed the same payment
+       * at exactly the same time, the unique tx_ref
+       * constraint can protect us from duplication.
+       */
+      if (
+        depositInsertError.code === '23505'
+      ) {
+        const {
+          data: alreadyCreated,
+        } = await supabaseAdmin
+          .from('wallet_deposits')
+          .select('*')
+          .eq('tx_ref', verifiedTxRef)
+          .maybeSingle();
+
+        const {
+          data: latestProfile,
+        } = await supabaseAdmin
+          .from('profiles')
+          .select('credits')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        return NextResponse.json({
+          success: true,
+          already_processed: true,
+          status: 'paid',
+          tx_ref: verifiedTxRef,
+          amount:
+            Number(
+              alreadyCreated?.amount ||
+              verifiedAmount
+            ),
+          credits_added:
+            Math.floor(
+              Number(
+                alreadyCreated?.amount ||
+                verifiedAmount
+              ) / 10
+            ),
+          credits:
+            Number(
+              latestProfile?.credits || 0
+            ),
+        });
+      }
+
+      console.error(
+        'Deposit creation error:',
+        depositInsertError
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            'Payment was verified, but the wallet deposit could not be recorded.',
+          payment_verified: true,
           tx_ref: verifiedTxRef,
         },
         { status: 500 }
       );
     }
+
+    // --------------------------------------------------
+    // ADD CREDITS
+    // --------------------------------------------------
 
     const currentCredits =
       Number(profile.credits || 0);
@@ -427,9 +483,6 @@ export async function POST(request: Request) {
     const newCredits =
       currentCredits + creditsToAdd;
 
-    /*
-     * Add the verified credits.
-     */
     const {
       error: creditUpdateError,
     } = await supabaseAdmin
@@ -448,7 +501,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            'Payment was confirmed and marked paid, but credits could not be added automatically.',
+            'Payment was recorded as paid, but credits could not be added automatically.',
           payment_processed: true,
           tx_ref: verifiedTxRef,
         },
@@ -456,8 +509,12 @@ export async function POST(request: Request) {
       );
     }
 
+    // --------------------------------------------------
+    // SUCCESS
+    // --------------------------------------------------
+
     console.log(
-      `PAYMENT SUCCESS: ${verifiedTxRef} | User: ${user.id} | Amount: ₦${depositAmount} | Credits: +${creditsToAdd}`
+      `PAYMENT SUCCESS: ${verifiedTxRef} | User: ${user.id} | Amount: ₦${verifiedAmount} | Credits: +${creditsToAdd}`
     );
 
     return NextResponse.json({
@@ -465,10 +522,11 @@ export async function POST(request: Request) {
       already_processed: false,
       status: 'paid',
       tx_ref: verifiedTxRef,
-      amount: depositAmount,
+      amount: verifiedAmount,
       credits_added: creditsToAdd,
       credits: newCredits,
     });
+
   } catch (error: any) {
     console.error(
       'Verify payment API error:',

@@ -82,8 +82,8 @@ export async function GET() {
      * ---------------------------------------------------------
      * 3. Service-role client
      *
-     * This runs ONLY on the server.
-     * It bypasses RLS so the admin can see all users.
+     * Server-side only.
+     * Allows the administrator to read all application data.
      * ---------------------------------------------------------
      */
 
@@ -129,11 +129,11 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 5. Get video counts and spending
+     * 5. Get all generated videos
      *
-     * We retrieve user_id + cost so we can calculate:
+     * Used to calculate:
      *
-     * - Number of videos per user
+     * - Number of videos generated per user
      * - Credits spent per user
      * ---------------------------------------------------------
      */
@@ -158,7 +158,7 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 6. Build user generation statistics
+     * 6. Build generation statistics per user
      * ---------------------------------------------------------
      */
 
@@ -186,7 +186,13 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 7. Get successful deposits per user
+     * 7. Get all wallet deposits
+     *
+     * IMPORTANT:
+     *
+     * There is no pending/successful filtering anymore.
+     * A wallet_deposits row represents money that has
+     * actually been verified and paid.
      * ---------------------------------------------------------
      */
 
@@ -195,10 +201,7 @@ export async function GET() {
       error: depositsError,
     } = await supabaseAdmin
       .from('wallet_deposits')
-      .select(
-        'user_id, amount, status'
-      )
-      .eq('status', 'successful');
+      .select('user_id, amount');
 
     if (depositsError) {
       console.error(
@@ -213,7 +216,7 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 8. Calculate deposits per user
+     * 8. Calculate total deposited per user
      * ---------------------------------------------------------
      */
 
@@ -233,7 +236,7 @@ export async function GET() {
 
     /*
      * ---------------------------------------------------------
-     * 9. Combine everything
+     * 9. Combine all user information
      * ---------------------------------------------------------
      */
 

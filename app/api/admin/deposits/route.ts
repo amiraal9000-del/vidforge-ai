@@ -7,6 +7,12 @@ const ADMIN_EMAIL = 'Calibossmfr01@gmail.com';
 
 export async function GET() {
   try {
+    /*
+     * ---------------------------------------------------------
+     * 1. Verify the currently logged-in Supabase user
+     * ---------------------------------------------------------
+     */
+
     const cookieStore = await cookies();
 
     const supabaseAuth = createServerClient(
@@ -43,20 +49,40 @@ export async function GET() {
 
     if (userError || !user) {
       return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
+        {
+          error: 'Unauthorized',
+        },
+        {
+          status: 401,
+        }
       );
     }
+
+    /*
+     * ---------------------------------------------------------
+     * 2. Verify administrator
+     * ---------------------------------------------------------
+     */
 
     if (
       user.email?.toLowerCase() !==
       ADMIN_EMAIL.toLowerCase()
     ) {
       return NextResponse.json(
-        { error: 'Admin access required' },
-        { status: 403 }
+        {
+          error: 'Admin access required',
+        },
+        {
+          status: 403,
+        }
       );
     }
+
+    /*
+     * ---------------------------------------------------------
+     * 3. Service-role client
+     * ---------------------------------------------------------
+     */
 
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,14 +96,17 @@ export async function GET() {
     );
 
     /*
-     * Read every deposit.
+     * ---------------------------------------------------------
+     * 4. Read all verified wallet deposits
      *
-     * IMPORTANT:
-     * We intentionally do NOT filter by status here.
-     * This lets the admin see pending, paid, failed,
-     * cancelled, or any other status currently stored
-     * in the database.
+     * A row in wallet_deposits represents money that has
+     * already been verified and paid.
+     *
+     * We do NOT calculate pending revenue.
+     * We do NOT expose pending deposits.
+     * ---------------------------------------------------------
      */
+
     const {
       data: deposits,
       error: depositsError,
@@ -113,9 +142,11 @@ export async function GET() {
     }
 
     /*
-     * Get the user profiles so the admin page can
-     * display email addresses alongside deposits.
+     * ---------------------------------------------------------
+     * 5. Get profile emails
+     * ---------------------------------------------------------
      */
+
     const userIds = Array.from(
       new Set(
         (deposits || []).map(
@@ -152,6 +183,12 @@ export async function GET() {
       profiles = profileRows || [];
     }
 
+    /*
+     * ---------------------------------------------------------
+     * 6. Build profile lookup
+     * ---------------------------------------------------------
+     */
+
     const profileMap: Record<
       string,
       string | null
@@ -161,6 +198,16 @@ export async function GET() {
       profileMap[profile.id] =
         profile.email;
     }
+
+    /*
+     * ---------------------------------------------------------
+     * 7. Format deposits
+     *
+     * Every deposit returned here is treated as paid.
+     * The API no longer exposes pending/failed/cancelled
+     * business states.
+     * ---------------------------------------------------------
+     */
 
     const formattedDeposits =
       (deposits || []).map(
@@ -179,73 +226,44 @@ export async function GET() {
           payment_provider:
             deposit.payment_provider ||
             'flutterwave',
-          status:
-            deposit.status || 'unknown',
+
+          status: 'paid',
+
           payment_link:
             deposit.payment_link || null,
+
           created_at:
             deposit.created_at,
+
           updated_at:
             deposit.updated_at,
         })
       );
 
     /*
-     * Calculate summary values from the actual
-     * statuses stored in the database.
-     *
-     * "paid" is now the successful status used
-     * by our verification flow.
+     * ---------------------------------------------------------
+     * 8. Calculate business totals
+     * ---------------------------------------------------------
      */
+
     const totalDeposits =
       formattedDeposits.length;
 
-    const paidDeposits =
-      formattedDeposits.filter(
-        (deposit) =>
-          String(deposit.status)
-            .toLowerCase() === 'paid'
-      );
-
-    const pendingDeposits =
-      formattedDeposits.filter(
-        (deposit) =>
-          String(deposit.status)
-            .toLowerCase() === 'pending'
-      );
-
-    const paidRevenue =
-      paidDeposits.reduce(
+    const totalRevenue =
+      formattedDeposits.reduce(
         (sum, deposit) =>
-          sum + Number(deposit.amount || 0),
-        0
-      );
-
-    const pendingRevenue =
-      pendingDeposits.reduce(
-        (sum, deposit) =>
-          sum + Number(deposit.amount || 0),
+          sum +
+          Number(
+            deposit.amount || 0
+          ),
         0
       );
 
     /*
-     * Keep a breakdown of every status that actually
-     * exists in the database.
+     * ---------------------------------------------------------
+     * 9. Return paid-only deposit data
+     * ---------------------------------------------------------
      */
-    const statusBreakdown: Record<
-      string,
-      number
-    > = {};
-
-    for (const deposit of formattedDeposits) {
-      const status =
-        String(
-          deposit.status || 'unknown'
-        ).toLowerCase();
-
-      statusBreakdown[status] =
-        (statusBreakdown[status] || 0) + 1;
-    }
 
     return NextResponse.json({
       success: true,
@@ -255,15 +273,8 @@ export async function GET() {
 
       summary: {
         totalDeposits,
-        paidDeposits:
-          paidDeposits.length,
-        pendingDeposits:
-          pendingDeposits.length,
-        paidRevenue,
-        pendingRevenue,
+        totalRevenue,
       },
-
-      statusBreakdown,
     });
   } catch (error: any) {
     console.error(

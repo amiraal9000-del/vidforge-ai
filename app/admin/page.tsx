@@ -15,8 +15,7 @@ type DashboardStats = {
   totalUsers: number;
   totalVideos: number;
   totalCredits: number;
-  successfulDeposits: number;
-  pendingDeposits: number;
+  totalDeposits: number;
   totalRevenue: number;
   totalCreditsSpent: number;
 };
@@ -28,8 +27,7 @@ export default function AdminOverviewPage() {
     totalUsers: 0,
     totalVideos: 0,
     totalCredits: 0,
-    successfulDeposits: 0,
-    pendingDeposits: 0,
+    totalDeposits: 0,
     totalRevenue: 0,
     totalCreditsSpent: 0,
   });
@@ -203,7 +201,7 @@ export default function AdminOverviewPage() {
         <StatCard
           title="Revenue"
           value={formatNaira(stats.totalRevenue)}
-          description="Successful wallet deposits"
+          description="Total verified wallet revenue"
           icon={<Wallet size={22} />}
         />
 
@@ -217,7 +215,7 @@ export default function AdminOverviewPage() {
       </section>
 
       {/* Secondary statistics */}
-      <section className="grid grid-cols-1 sm:grid-cols-3 gap-5 mt-5">
+      <section className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-5">
 
         <StatCard
           title="Credits Held"
@@ -228,18 +226,10 @@ export default function AdminOverviewPage() {
         />
 
         <StatCard
-          title="Successful Deposits"
-          value={stats.successfulDeposits.toLocaleString()}
-          description="Completed wallet deposits"
+          title="Wallet Deposits"
+          value={stats.totalDeposits.toLocaleString()}
+          description="Verified wallet deposits"
           icon={<Wallet size={22} />}
-          compact
-        />
-
-        <StatCard
-          title="Pending Deposits"
-          value={stats.pendingDeposits.toLocaleString()}
-          description="Awaiting payment confirmation"
-          icon={<CreditCard size={22} />}
           compact
         />
 
